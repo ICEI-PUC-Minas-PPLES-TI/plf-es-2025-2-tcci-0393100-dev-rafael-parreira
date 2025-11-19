@@ -1,0 +1,32 @@
+@startuml
+left to right direction
+
+actor "Desenvolvedor React" as Dev
+actor "Engenheiro de QA" as QA
+actor "Pesquisador Acadêmico" as Pesquisador
+actor "Equipe Ágil" as Equipe
+
+rectangle "Funcionalidades Principais\n\n" {
+
+  usecase "Configurar Teste com Múltiplos Usuários" as UC1
+  usecase "Visualizar Relatórios" as UC2
+  usecase "Executar Teste Automatizado de Qualidade" as UC3
+  usecase "Modificar Código-Fonte Open-Source" as UC4
+  usecase "Acessar Documentação Técnica" as UC5
+  usecase "Integrar Testes em Pipeline" as UC6
+}
+
+Dev --> UC1
+
+QA --> UC2
+QA --> UC3
+
+Pesquisador --> UC4
+Pesquisador --> UC5
+
+Equipe --> UC6
+
+
+UC3 <.. UC2 : <<extend>>
+
+@enduml

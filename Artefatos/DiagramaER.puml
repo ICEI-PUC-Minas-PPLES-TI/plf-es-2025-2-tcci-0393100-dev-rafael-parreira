@@ -1,0 +1,66 @@
+@startuml
+
+' Definição das Entidades (Tabelas)
+entity Usuario {
+  **ID : UUID <<PK>>**
+  --
+  nome : VARCHAR(100)
+  email : VARCHAR(100) <<unique>>
+  senha_hash : VARCHAR(255)
+  funcao : ENUM('DEV','QA','PESQUISADOR','EQUIPE')
+  ativo : BOOLEAN
+  criado_em : TIMESTAMP
+}
+
+entity ConfiguracaoAPI {
+  **ID : UUID <<PK>>**
+  --
+  usuario_id : UUID <<FK>>
+  api_tipo : ENUM('WEBRTC','JITSI','ZOOM')
+  endpoint : VARCHAR(255)
+  max_usuarios_simultaneos : INT
+}
+
+entity Teste {
+  **ID : UUID <<PK>>**
+  --
+  usuario_id : UUID <<FK>>
+  quantidade_usuarios : INT
+  api_tipo : ENUM('WEBRTC','JITSI','ZOOM')
+  duracao_min : INT
+  status : ENUM('CONFIGURADO','EXECUTANDO','CONCLUIDO','FALHO')
+  iniciado_em : TIMESTAMP
+  concluido_em : TIMESTAMP
+}
+
+entity Relatorio {
+  **ID : UUID <<PK>>**
+  --
+  teste_id : UUID <<FK>> **<<unique>>**
+  latencia_media_ms : FLOAT
+  taxa_falhas_percent : FLOAT
+  cobertura_testes_percent : FLOAT
+  caminho_arquivo_json : VARCHAR(255)
+  caminho_arquivo_csv : VARCHAR(255)
+  gerado_em : TIMESTAMP
+}
+
+' Relacionamentos
+' Cada Teste TEM UM Usuario (1..1 obrigatório)
+' Cada Usuario TEM 0 ou mais Testes (0..N)
+Usuario "1" --o "*" Teste : realiza
+
+' Cada ConfiguracaoAPI TEM UM Usuario (1..1 obrigatório)
+' Cada Usuario TEM 0 ou mais ConfiguracoesAPI (0..N)
+Usuario "1" --o "*" ConfiguracaoAPI : possui
+
+' Cada Teste TEM UM Relatorio (1..1 obrigatório)
+' Cada Relatorio TEM UM Teste (1..1 obrigatório - Chave Estrangeira Única em Relatorio garante isso)
+Teste "1" -- "1" Relatorio : gera
+
+' Nota sobre o Status
+note bottom of Teste
+  Status gerenciado por flags no BD
+end note
+
+@enduml

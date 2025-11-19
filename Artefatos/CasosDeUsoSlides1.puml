@@ -1,0 +1,23 @@
+@startuml
+top to bottom direction
+
+actor "Desenvolvedor React" as Dev
+actor "Engenheiro de QA" as QA
+
+rectangle "Funcionalidades Principais\n\n\n\n\n\n\n" {
+
+  usecase "Configurar Teste com\nMúltiplos Usuários" as UC1
+  usecase "Visualizar\nRelatórios" as UC2
+  usecase "Executar Teste\nAutomatizado de Qualidade" as UC3
+
+  ' Força o layout vertical
+  UC2 -[hidden]-> UC3
+}
+
+Dev --> UC1
+QA --> UC2
+QA --> UC3
+
+UC3 <.. UC2 : <<extend>>
+
+@enduml

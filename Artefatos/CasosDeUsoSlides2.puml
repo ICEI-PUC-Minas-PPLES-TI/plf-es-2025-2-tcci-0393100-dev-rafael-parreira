@@ -1,0 +1,27 @@
+@startuml
+top to bottom direction
+
+actor "Pesquisador Acadêmico" as Pesquisador
+actor "Equipe Ágil" as Equipe
+
+rectangle "Funcionalidades Principais\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n" {
+
+  usecase "Modificar Código-Fonte\nOpen-Source" as UC4
+  usecase "Acessar Documentação\nTécnica" as UC5
+  usecase "Integrar Testes\nem Pipeline" as UC6
+
+  ' Organiza em duas colunas (pilhas de 2)
+  ' Coluna 1
+  UC4 -[hidden]down- UC6
+  ' Coluna 2
+
+  ' Alinha as duas colunas lado a lado
+  UC4 -[hidden]right- UC5
+}
+
+Pesquisador --> UC4
+Pesquisador --> UC5
+
+Equipe --> UC6
+
+@enduml

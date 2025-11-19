@@ -1,0 +1,77 @@
+@startuml
+skinparam linetype ortho
+skinparam component {
+    StereotypeFontSize 0
+    shadowing false
+    BackgroundColor #FFFFFF
+    BorderColor #555555
+}
+
+skinparam package {
+    BorderColor #555555
+    BackgroundColor #FAFAFA
+    StereotypeFontColor #333333
+    StereotypeFontStyle italic
+}
+
+skinparam note {
+    BackgroundColor #FFFFE0
+    BorderColor #AAAA00
+}
+
+package "Interface Web (React)\nSPA Responsiva" as Web {
+    component "Dashboard\n<size:10>Painel com métricas" as Dash
+    component "Configurar Teste\n<size:10>Formulário de parâmetros" as Config
+    component "Executar Teste\n<size:10>Monitor em tempo real" as Exec
+    component "Relatórios\n<size:10>Tabelas e gráficos" as ReportDash
+    component "Documentação\n<size:10>Técnica e contribuição" as Docs
+
+    Dash -[hidden]down- Config
+    Config -[hidden]down- Exec
+    Exec -[hidden]down- ReportDash
+    ReportDash -[hidden]down- Docs
+}
+
+package "StreamSentry Core (Node.js)\nBackend Central" as Core {
+    component "TestController\n<size:10>REST API" as TC
+    component "TestEngine\n<size:10>Orquestra execução" as TE
+    component "MetricCollector\n<size:10>Coletor de latência/falhas" as MC
+    component "ReportGenerator\n<size:10>Gera JSON/CSV" as RG
+    component "PostgreSQL Adapter\n<size:10>ORM + CRUD" as DB
+    component "ReportController\n<size:10>REST API" as RC
+
+    TC -[hidden]down- TE
+    TE -[hidden]down- MC
+
+    TC -[hidden]down- RG
+    RG -[hidden]down- RC
+
+    TE -[hidden]right- RG
+    DB -[hidden]right- RC
+}
+
+package "Integração/Externa\nAPIs de Videoconferência" as API {
+    component "WebRTC Native\n<size:10>Peer-Connection direta" as WebRTC
+    component "Zoom SDK\n<size:10>SDK Oficial" as Zoom
+    component "Jitsi SDK\n<size:10>WebSocket + Sala" as Jitsi
+}
+
+note as N1
+    Orquestra testes,
+    métricas e relatórios
+end note
+N1 .. Core
+
+Web --> TC : HTTPS
+
+TC -down-> TE
+TE -down-> MC
+TE -down-> DB
+RG -down-> RC
+RG -down-> DB
+
+MC -down-> WebRTC
+MC -down-> Zoom
+MC -down-> Jitsi
+
+@enduml

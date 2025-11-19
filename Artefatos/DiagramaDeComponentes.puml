@@ -1,0 +1,59 @@
+@startuml
+
+interface "REST API" as RestApi
+interface "SQL" as SQL
+interface "WebSocket" as WebSocket
+
+package "Interface Web (React)" {
+  [Dashboard]
+  [Configurar Teste]
+  [Executar Teste]
+  [Relatórios]
+  [Documentação]
+}
+
+package "StreamSentry Core (Node.js)" {
+  [<<REST API>>\nTestController] as TestController
+  [<<REST API>>\nReportController] as ReportController
+  [<<Service>>\nTestEngine] as TestEngine
+  [<<Service>>\nMetricCollector] as MetricCollector
+  [<<Service>>\nReportGenerator] as ReportGenerator
+  [<<ORM>>\nPostgreSQL Adapter] as OrmAdapter
+}
+
+package "Integração Externa" {
+  [<<External>>\nWebRTC Native] as WebRTC
+  [<<External>>\nZoom SDK] as Zoom
+  [<<External>>\nJitsi SDK] as Jitsi
+}
+
+[Dashboard] --> RestApi
+[Configurar Teste] --> RestApi
+[Executar Teste] --> RestApi
+[Relatórios] --> RestApi
+[Documentação] --> RestApi
+
+RestApi --> TestController
+
+TestEngine -D-> SQL
+ReportGenerator -R-> SQL
+
+SQL --> OrmAdapter
+
+TestController --> TestEngine
+TestController --> OrmAdapter
+
+ReportController --> ReportGenerator
+
+TestEngine --> MetricCollector
+
+MetricCollector --> WebSocket
+
+WebSocket --> WebRTC
+WebSocket --> Zoom
+WebSocket --> Jitsi
+
+note "Backend central: orquestra testes, métricas e relatórios" as N1
+OrmAdapter .. N1
+
+@enduml

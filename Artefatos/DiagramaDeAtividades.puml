@@ -1,0 +1,36 @@
+@startuml
+
+start
+
+:Usuário acessa Dashboard;
+
+while (Autenticado?) is (não)
+  :Redireciona para Login;
+endwhile (sim)
+
+partition "1. Configurar Teste" {
+  :Define usuários virtuais -> :Seleciona API (WebRTC/Jitsi/Zoom) -> :Define duração;
+
+  while (Válido?) is (não)
+    :Mostra erro;
+  endwhile (sim)
+
+  partition "Configurar Teste" {
+     :Salva no BD;
+  }
+}
+
+partition "2. Iniciar Teste" {
+  :Clica "Iniciar" -> :Backend inicia sessão API -> :Cria usuários simulados;
+}
+
+partition "3. Monitorar" {
+  while (Duração ativa?) is (sim)
+    :Coletar métricas -> :Salvar no BD;
+  endwhile (não)
+}
+
+:Finaliza sessão -> :Gera relatório JSON/CSV -> :Salva relatório -> :Redireciona para Relatórios;
+
+stop
+@enduml

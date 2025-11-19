@@ -1,0 +1,82 @@
+@startuml
+skinparam linetype ortho
+
+actor Usuário
+participant "Interface Web\n(React)" as Web
+participant "StreamSentry Core\n(Node.js)" as Core
+participant "Módulo de Teste\n(Puppeteer)" as Puppeteer
+participant "API Videoconferência\n(Jitsi/Zoom)" as API
+participant "Banco de Dados\n(PostgreSQL)" as DB
+
+Usuário -> Web: 1: Acessa "Configurar Teste"
+activate Web
+Web -> Core: 2: POST /configurar (usuarios, api, duracao)
+activate Core
+Core -> DB: 3: INSERT Teste
+activate DB
+DB --> Core: 3.1: ID do Teste
+deactivate DB
+Core --> Web: 4: Configuração salva
+deactivate Core
+Web --> Usuário: 5: Confirmação
+deactivate Web
+
+Usuário -> Web: 6: Clica "Iniciar Teste"
+activate Web
+Web -> Core: 7: POST /executar (idTeste)
+activate Core
+Core -> DB: 8: SELECT Configuração
+activate DB
+DB --> Core: 8.1: Parâmetros
+deactivate DB
+Core -> Puppeteer: 9: Iniciar Simulação
+activate Puppeteer
+Puppeteer -> API: 10: Criar Sala + Usuários Virtuais
+activate API
+API --> Puppeteer: 10.1: Sessão Iniciada
+deactivate API
+
+loop a cada 2s (até duração)
+    Puppeteer -> API: 11: getStats()
+    activate API
+    API --> Puppeteer: 11.1: latência, falhas
+    deactivate API
+
+    Puppeteer -> Core: 12: Enviar Métrica
+    Core -> DB: 13: INSERT Métrica
+    activate DB
+    deactivate DB
+
+end
+
+Puppeteer --> Core: 14: Teste Concluído
+deactivate Puppeteer
+Core -> DB: 15: Gerar Relatório
+activate DB
+DB --> Core: 15.1: ID Relatório
+deactivate DB
+Core --> Web: 16: 200 OK + ID
+deactivate Core
+Web --> Usuário: 17: Teste Finalizado
+deactivate Web
+
+... ...
+
+Usuário -> Web: 18: Acessa "Relatórios"
+activate Web
+Web -> Core: 19: GET /relatorio/[id]?formato=CSV
+activate Core
+Core -> DB: 20: SELECT Relatório + Métricas
+activate DB
+DB --> Core: 20.1: Dados Completas
+deactivate DB
+Core --> Web: 21: CSV Gerado
+deactivate Core
+Web --> Usuário: 22: Download CSV
+deactivate Web
+
+note right of API
+  Fluxo completo:
+  Configurar -> Executar -> Relatar
+end note
+@enduml

@@ -1,0 +1,32 @@
+@startuml
+
+' Define o ator
+actor "Desenvolvedor\nReact" as Dev
+
+' Define os participantes
+participant "Dashboard Web\n(React UI)" as Web
+participant "StreamSentry Core\n(API Backend)" as Core
+participant "Módulo de Teste\n(API Backend)" as Modulo
+participant "Banco de Dados" as DB
+
+' Início do fluxo
+Dev -> Web: Acessa painel "Configurar Teste"
+activate Web
+
+Web -> Core: configurarTeste(quantidadeUsuarios, api, duracao)
+activate Core
+
+Core -> DB: salvarParametrosTeste()
+activate DB
+
+DB --> Core: Confirmação de salvamento
+deactivate DB
+
+Core --> Web: Teste configurado com sucesso
+deactivate Core
+
+' A barra de ativação do Web termina aqui,
+' embora não haja uma mensagem explícita de retorno ao dev.
+deactivate Web
+
+@enduml
