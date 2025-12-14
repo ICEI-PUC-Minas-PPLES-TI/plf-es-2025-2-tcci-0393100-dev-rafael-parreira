@@ -1,0 +1,26 @@
+@startuml
+skinparam linetype ortho
+autonumber
+
+actor "Usuário" as User
+participant "Frontend" as Front
+participant "ReportGenerator" as Gen
+participant "Banco de Dados" as DB
+
+User -> Front: 1: Solicita Exportação (CSV)
+activate Front
+Front -> Gen: 2: GET /relatorio/exportar?fmt=csv
+activate Gen
+
+Gen -> DB: 3: Query Agregada (AVG Latência, Errors)
+activate DB
+DB --> Gen: 4: Dataset Retornado
+deactivate DB
+
+Gen -> Gen: 5: Converter JSON -> CSV
+Gen --> Front: 6: Stream de Download (Blob)
+deactivate Gen
+
+Front --> User: 7: Download do Arquivo
+deactivate Front
+@enduml

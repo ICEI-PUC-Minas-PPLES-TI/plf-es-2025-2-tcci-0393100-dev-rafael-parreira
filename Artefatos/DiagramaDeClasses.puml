@@ -1,0 +1,87 @@
+@startuml
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+package "Modelos (Entidades)" {
+    class Usuario {
+      - id: UUID
+      - nome: string
+      - email: string
+      + autenticar(): bool
+    }
+
+    class Teste {
+      - id: UUID
+      - config: JSON
+      - status: EnumStatus
+      - iniciado_em: timestamp
+      - concluido_em: timestamp
+      + getDuracao(): int
+    }
+
+    class Relatorio {
+      - id: UUID
+      - metricas: JSON
+      - url_json: string
+      - url_csv: string
+      + gerarResumo(): string
+    }
+}
+
+package "Core (Lógica de Negócio)" {
+    class TestEngine {
+        + iniciarTeste(teste: Teste): void
+        - instanciarWorkers(qtd: int): void
+        - loopMonitoramento(): void
+    }
+
+    class MetricCollector {
+        + processar(raw: JSON): Metrica
+        + persistir(dados: Metrica): void
+    }
+
+    class ReportGenerator {
+        + exportar(testeId: UUID, formato: string): File
+    }
+
+    class "ProviderFactory" as Factory {
+        + criarProvider(tipo: string): IConferenceProvider
+    }
+}
+
+package "Integração Externa (Strategy Pattern)" {
+    interface "IConferenceProvider" as IProvider {
+        + conectar(token: string): boolean
+        + getStats(): MetricasRaw
+        + desconectar(): void
+    }
+
+    class JitsiProvider implements IProvider {
+        + conectar(): boolean
+        + getStats(): MetricasRaw
+    }
+
+    class ZoomProvider implements IProvider {
+        + conectar(): boolean
+        + getStats(): MetricasRaw
+    }
+
+    class WebRTCProvider implements IProvider {
+        + conectar(): boolean
+        + getStats(): MetricasRaw
+    }
+}
+
+' Relacionamentos
+Usuario "1" -- "*" Teste : solicita >
+Teste "1" -- "1" Relatorio : gera >
+
+TestEngine --> Factory : usa
+Factory ..> IProvider : cria instância
+TestEngine o-- IProvider : orquestra
+TestEngine ..> MetricCollector : envia telemetria
+TestEngine -- Teste : atualiza estado
+
+MetricCollector -- Relatorio : consolida dados
+
+@enduml

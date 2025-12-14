@@ -1,0 +1,40 @@
+@startuml
+skinparam linetype ortho
+autonumber
+
+actor "Usuário" as User
+participant "Frontend" as Front
+participant "TestEngine" as Engine
+participant "Worker\n(Puppeteer)" as Worker
+participant "API Externa" as Ext
+participant "Banco de Dados" as DB
+
+User -> Front: 1: Clica "Iniciar"
+Front -> Engine: 2: POST /executar (WebSocket Init)
+activate Engine
+
+Engine -> Worker: 3: Spawn N instâncias
+activate Worker
+Worker -> Ext: 4: Entrar na Sala (WebRTC)
+activate Ext
+Ext --> Worker: 5: Conexão OK
+
+loop A cada 2s (Monitoramento)
+    Worker -> Ext: 6: getStats()
+    Ext --> Worker: 7: Latência/Bitrate
+
+    Worker -> Engine: 8: Enviar Telemetria Raw
+
+    par Processamento Paralelo
+        Engine -> DB: 9: Salvar Métrica Time-Series
+        Engine -> Front: 10: WS Event: 'metric_update'
+        Front -> User: 11: Atualiza Gráfico
+    end
+end
+
+Engine -> Worker: 12: Terminate
+deactivate Worker
+deactivate Ext
+Engine -> Front: 13: WS Event: 'test_finished'
+deactivate Engine
+@enduml
