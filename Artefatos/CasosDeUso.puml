@@ -1,32 +1,36 @@
 @startuml
 left to right direction
+skinparam packageStyle rectangle
 
 actor "Desenvolvedor React" as Dev
 actor "Engenheiro de QA" as QA
-actor "Pesquisador Acadêmico" as Pesquisador
 actor "Equipe Ágil" as Equipe
 
-rectangle "Funcionalidades Principais\n\n" {
+rectangle "Stream Sentry - Sistema de Testes E2E" {
 
-  usecase "Configurar Teste com Múltiplos Usuários" as UC1
-  usecase "Visualizar Relatórios" as UC2
-  usecase "Executar Teste Automatizado de Qualidade" as UC3
-  usecase "Modificar Código-Fonte Open-Source" as UC4
-  usecase "Acessar Documentação Técnica" as UC5
-  usecase "Integrar Testes em Pipeline" as UC6
+    ' Foco: Automação e Simulação (Necessidade 1)
+    usecase "Configurar Provedores (Strategy Pattern)" as UC_Config
+    usecase "Simular Múltiplos Usuários Virtuais" as UC_Simulate
+    usecase "Injetar Instabilidade de Rede" as UC_Stress
+
+    ' Foco: Monitoramento e Telemetria (Necessidade 2)
+    usecase "Monitorar Telemetria em Tempo Real (WebSockets)" as UC_Live
+    usecase "Auditar Métricas de Áudio/Vídeo" as UC_Audit
+
+    ' Foco: Análise e DX (Necessidade 3)
+    usecase "Visualizar Histórico e Dashboard" as UC_Dash
+    usecase "Exportar Relatórios (JSON/CSV)" as UC_Export
 }
 
-Dev --> UC1
+' Relacionamentos baseados no Perfil de Usuário do Doc de Visão
+Dev --> UC_Config
+Dev --> UC_Simulate
+Dev --> UC_Stress
 
-QA --> UC2
-QA --> UC3
+QA --> UC_Live
+QA --> UC_Audit
 
-Pesquisador --> UC4
-Pesquisador --> UC5
-
-Equipe --> UC6
-
-
-UC3 <.. UC2 : <<extend>>
+Equipe --> UC_Dash
+Equipe --> UC_Export
 
 @enduml

@@ -1,0 +1,20 @@
+@startuml
+hide footbox
+skinparam ParticipantPadding 20
+
+actor "Equipe Ágil" as Equipe
+participant "Sistema\nStreamSentry" as Sistema
+database "Banco de Dados" as DB
+
+Equipe -> Sistema: solicitarRelatorio(idTeste, formato)
+activate Sistema
+
+Sistema -> DB: Consultar histórico de métricas
+activate DB
+DB --> Sistema: Dados Brutos
+deactivate DB
+
+Sistema -> Sistema: Consolidar Médias e Formatar Arquivo
+Sistema --> Equipe: Download do arquivo (JSON/CSV)
+deactivate Sistema
+@enduml

@@ -1,0 +1,33 @@
+@startuml
+hide stereotype
+skinparam classAttributeIconSize 0
+
+actor Usuário
+participant "Dashboard Web\n(Cliente Socket)" as Web
+participant "StreamSentry Core\n(Engine)" as Core
+participant "Módulo de Teste\n(Puppeteer)" as Worker
+participant "API Videoconferência\n(WebRTC/Jitsi)" as API
+participant "Banco de Dados" as DB
+
+Usuário -> Web: 1: Visualizar Execução
+Web -> Core: 2: Conexão WebSocket (Handshake)
+
+Core -> Worker: 3: Instanciar Worker
+Worker -> API: 4: Entrar na Sala
+API --> Worker: 5: Stream Iniciado
+
+Worker -> API: 6: getStats() (Coleta)
+API --> Worker: 7: Métricas Raw
+
+Worker -> Core: 8: Enviar Telemetria
+Core -> DB: 9: Persistir Dados
+Core -> Web: 10: Evento 'metric_update'
+Web -> Usuário: 11: Atualiza Gráfico Live
+
+' Nota para indicar o loop
+note right of API
+    6-11: Repetido continuamente
+    via WebSocket (Tempo Real)
+end note
+
+@enduml

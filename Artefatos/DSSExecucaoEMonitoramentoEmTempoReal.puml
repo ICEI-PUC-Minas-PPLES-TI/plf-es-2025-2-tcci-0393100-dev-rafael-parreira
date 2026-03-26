@@ -1,0 +1,23 @@
+@startuml
+hide footbox
+skinparam ParticipantPadding 20
+
+actor "Engenheiro de QA" as QA
+participant "Sistema\nStreamSentry" as Sistema
+
+QA -> Sistema: iniciarTeste(UUID)
+activate Sistema
+Sistema --> QA: Confirmar Início (Status: EXECUTANDO)
+
+loop Durante a Duração do Teste
+    Sistema -> QA: Enviar métricas de performance (Live Data)
+
+    opt Injeção de Instabilidade
+        QA -> Sistema: solicitarFalha(tipo)
+        Sistema --> QA: Notificar alteração de rede
+    end
+end
+
+Sistema --> QA: Notificar Conclusão do Teste
+deactivate Sistema
+@enduml

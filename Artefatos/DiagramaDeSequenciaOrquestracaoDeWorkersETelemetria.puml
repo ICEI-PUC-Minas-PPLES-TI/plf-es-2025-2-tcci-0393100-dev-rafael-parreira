@@ -1,0 +1,37 @@
+@startuml
+hide footbox
+skinparam ParticipantPadding 15
+skinparam MaxMessageSize 150
+
+actor "Engenheiro de QA" as QA
+participant "Dashboard Web\n(React)" as Web
+participant "TestEngine\n(Core)" as Core
+participant "WorkerNode\n(Puppeteer)" as Worker
+participant "SocketManager\n(WS Hub)" as Socket
+participant "API de Vídeo\n(External)" as Ext
+
+QA -> Web: Clica em "Iniciar Teste"
+activate Web
+Web -> Core: WS: 'test_start'
+activate Core
+
+Core -> Worker: spawn(config)
+activate Worker
+Worker -> Ext: Entrar na Sala (Handshake)
+Ext --> Worker: Conexão OK
+
+loop Ciclo de Monitoramento
+    Worker -> Ext: getStats() (WebRTC Internals)
+    Ext --> Worker: Telemetria Raw
+    Worker -> Socket: broadcast('metric_update', data)
+    Socket -> Web: Push Live Data
+    Web -> Web: Atualiza Gráficos Instantaneamente
+end
+
+Core -> Worker: terminate()
+deactivate Worker
+Core -> Web: WS: 'test_finished'
+deactivate Core
+Web --> QA: Habilita visualização de relatórios
+deactivate Web
+@enduml

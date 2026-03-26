@@ -1,0 +1,35 @@
+@startuml
+hide footbox
+skinparam ParticipantPadding 15
+
+actor "Desenvolvedor React" as Dev
+participant "Dashboard Web" as Web
+participant "Core API\n(Node.js)" as Core
+participant "ProviderFactory" as Factory
+participant "IConferenceProvider\n(Strategy)" as Strategy
+participant "Banco de Dados" as DB
+
+Dev -> Web: Define API e Parâmetros
+activate Web
+Web -> Core: POST /api/configurar
+activate Core
+
+Core -> Factory: criarProvider(api_tipo)
+activate Factory
+Factory -> Strategy: instanciar(tipo)
+activate Strategy
+Strategy --> Factory: Objeto Driver
+deactivate Strategy
+Factory --> Core: Instância Pronta
+deactivate Factory
+
+Core -> DB: INSERT INTO testes (status: 'configurado')
+activate DB
+DB --> Core: UUID Gerado
+deactivate DB
+
+Core --> Web: 201 Created (ID)
+deactivate Core
+Web --> Dev: Notifica Sucesso
+deactivate Web
+@enduml
