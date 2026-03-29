@@ -28,3 +28,9 @@ Estrutura criada para o Stream Sentry:
   - `final-page.png` (screenshot final)
 - Para modo visual (ideal para gravar vídeo de demonstração), inicie o backend com:
   - `PUPPETEER_HEADFUL=1 PUPPETEER_SLOW_MO=250 go run .`
+
+## Teste de auditoria (Puppeteer + tempo real)
+
+- Após login, use **Iniciar teste** na UI (ou `POST /test/start` com `Authorization: Bearer <JWT>` e JSON `{ "apiUrl", "accessToken", "virtualUsers" }`).
+- O frontend abre `GET /ws/telemetry?token=<JWT>` e recebe eventos NDJSON (requisições, respostas, falhas) enquanto roda `puppeteer/run-audit.mjs`.
+- Apenas um teste por vez no servidor; se já houver um em execução, a API responde **409**.

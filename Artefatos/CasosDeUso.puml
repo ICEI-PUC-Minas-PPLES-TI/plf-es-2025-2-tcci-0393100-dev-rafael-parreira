@@ -1,28 +1,46 @@
 @startuml
 left to right direction
 skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam actorStyle awesome
 
+' Definição da Hierarquia de Atores para limpar as setas
+actor "Usuário do Sistema" as User
 actor "Desenvolvedor React" as Dev
 actor "Engenheiro de QA" as QA
 actor "Equipe Ágil" as Equipe
 
+' Herança: Todos os atores são Usuários e herdam o Login
+User <|-- Dev
+User <|-- QA
+User <|-- Equipe
+
 rectangle "Stream Sentry - Sistema de Testes E2E" {
 
-    ' Foco: Automação e Simulação (Necessidade 1)
-    usecase "Configurar Provedores (Strategy Pattern)" as UC_Config
-    usecase "Simular Múltiplos Usuários Virtuais" as UC_Simulate
-    usecase "Injetar Instabilidade de Rede" as UC_Stress
+    ' Caso de uso comum a todos através da herança
+    usecase "UC00: Realizar Autenticação\n(Registrar/Logar)" as UC_Auth
 
-    ' Foco: Monitoramento e Telemetria (Necessidade 2)
-    usecase "Monitorar Telemetria em Tempo Real (WebSockets)" as UC_Live
-    usecase "Auditar Métricas de Áudio/Vídeo" as UC_Audit
+    package "Módulo de Simulação" {
+        usecase "UC01: Configurar Provedores\n(Strategy Pattern)" as UC_Config
+        usecase "UC02: Simular Múltiplos\nUsuários Virtuais" as UC_Simulate
+        usecase "UC03: Injetar Instabilidade de Rede" as UC_Stress
+    }
 
-    ' Foco: Análise e DX (Necessidade 3)
-    usecase "Visualizar Histórico e Dashboard" as UC_Dash
-    usecase "Exportar Relatórios (JSON/CSV)" as UC_Export
+    package "Módulo de Monitoramento" {
+        usecase "UC04: Monitorar Telemetria em\nTempo Real (WebSockets)" as UC_Live
+        usecase "UC05: Auditar Métricas de Áudio/Vídeo" as UC_Audit
+    }
+
+    package "Módulo de Análise" {
+        usecase "UC06: Visualizar Histórico e Dashboard" as UC_Dash
+        usecase "UC07: Exportar Relatórios (JSON/CSV)" as UC_Export
+    }
 }
 
-' Relacionamentos baseados no Perfil de Usuário do Doc de Visão
+' Apenas o ator genérico aponta para o Login (Limpa o emaranhado)
+User --> UC_Auth
+
+' Atores específicos apontam para suas funções exclusivas
 Dev --> UC_Config
 Dev --> UC_Simulate
 Dev --> UC_Stress
