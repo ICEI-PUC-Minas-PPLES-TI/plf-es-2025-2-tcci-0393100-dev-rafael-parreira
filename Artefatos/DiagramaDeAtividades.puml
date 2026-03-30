@@ -1,36 +1,61 @@
 @startuml
+skinparam shadowing false
+skinparam MaxMessageSize 150
+skinparam conditionStyle diamond
+skinparam orientation horizontal
 
+|Usuário|
 start
-
-:Usuário acessa Dashboard;
-
-while (Autenticado?) is (não)
-  :Redireciona para Login;
-endwhile (sim)
-
-partition "1. Configurar Teste" {
-  :Define usuários virtuais -> :Seleciona API (WebRTC/Jitsi/Zoom) -> :Define duração;
-
-  while (Válido?) is (não)
-    :Mostra erro;
-  endwhile (sim)
-
-  partition "Configurar Teste" {
-     :Salva no BD;
-  }
+:Acessar Stream Sentry;
+partition "Segurança" {
+    if (Autenticado?) then (não)
+        :Realizar Login (JWT);
+    endif
 }
 
-partition "2. Iniciar Teste" {
-  :Clica "Iniciar" -> :Backend inicia sessão API -> :Cria usuários simulados;
+|#GhostWhite|Sistema (Stream Sentry)|
+partition "Configuração" {
+    :Definir Parâmetros e API;
+    :Validar via Strategy Pattern;
+    :Persistir Cenário no BD;
 }
 
-partition "3. Monitorar" {
-  while (Duração ativa?) is (sim)
-    :Coletar métricas -> :Salvar no BD;
-  endwhile (não)
+|#Ivory|Provedores & Workers|
+partition "Execução" {
+    fork
+        :Spawn Workers Puppeteer;
+        :Handshake com API Vídeo;
+    fork again
+        :Abrir WebSocket Hub;
+    end fork
 }
 
-:Finaliza sessão -> :Gera relatório JSON/CSV -> :Salva relatório -> :Redireciona para Relatórios;
+|Sistema (Stream Sentry)|
+partition "Monitoramento & Estresse" {
+    while (Duração Ativa?) is (sim)
+        :Coletar Métricas;
+        fork
+            :Update Dashboard (Hot Path);
+        fork again
+            :Save History (Cold Path);
+        end fork
 
+        if (Injetar Instabilidade?) then (sim)
+            |Provedores & Workers|
+            :Aplicar Network Latency;
+            |Sistema (Stream Sentry)|
+        endif
+    endwhile (não)
+}
+
+partition "Finalização" {
+    |Provedores & Workers|
+    :Teardown das Instâncias;
+    |Sistema (Stream Sentry)|
+    :Gerar Relatório (JSON/CSV);
+}
+
+|Usuário|
+:Visualizar Análise Final;
 stop
 @enduml

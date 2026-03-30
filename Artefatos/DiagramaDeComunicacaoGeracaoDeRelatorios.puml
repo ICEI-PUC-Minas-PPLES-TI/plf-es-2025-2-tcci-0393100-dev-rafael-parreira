@@ -1,0 +1,22 @@
+@startuml
+skinparam shadowing false
+skinparam MaxMessageSize 100
+
+actor "Equipe Ágil" as Equipe
+boundary "Interface\nRelatórios" as Web
+control "ReportGenerator" as Generator
+database "PostgreSQL" as DB
+
+' Distribuição em T
+Equipe -down- Web : "1: Solicita v"
+Web -down- Generator : "2: GET /api/export v"
+
+Generator -left- DB : "3: SELECT <"
+DB .right. Generator : "> 4: Data"
+
+Generator -down- Generator : "5: Agregação v"
+Generator -right- Generator : "6: Formatação >"
+
+Generator .up. Web : "^ 7: Stream"
+Web .up. Equipe : "^ 8: Download"
+@enduml

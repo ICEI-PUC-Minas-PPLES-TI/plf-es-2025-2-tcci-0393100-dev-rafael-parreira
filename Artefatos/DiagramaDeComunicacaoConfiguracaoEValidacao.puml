@@ -1,0 +1,26 @@
+@startuml
+skinparam shadowing false
+skinparam MaxMessageSize 100
+
+actor "Desenvolvedor React" as Dev
+boundary "Dashboard Web" as Web
+control "Core API\n(Node.js)" as Core
+control "ProviderFactory" as Factory
+entity "IConferenceProvider" as Strategy
+database "PostgreSQL" as DB
+
+' Layout em Blocos
+Dev -down- Web : "1: Define Parâmetros v"
+Web -down- Core : "2: POST /api/configurar v"
+
+Core -left- Factory : "3: criarProvider() >"
+Factory -down- Strategy : "4: instanciar() v"
+Strategy .up. Factory : "^ 5: Driver"
+Factory .right. Core : "< 6: Pronto"
+
+Core -down- DB : "7: INSERT v"
+DB .up. Core : "^ 8: UUID"
+
+Core .up. Web : "^ 9: 201 Created"
+Web .up. Dev : "^ 10: Sucesso"
+@enduml

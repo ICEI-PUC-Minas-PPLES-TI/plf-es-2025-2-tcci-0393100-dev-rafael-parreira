@@ -1,0 +1,30 @@
+@startuml
+skinparam shadowing false
+skinparam MaxMessageSize 100
+
+actor "Engenheiro de QA" as QA
+boundary "Dashboard Web" as Web
+control "TestEngine\n(Core)" as Core
+entity "WorkerNode" as Worker
+control "SocketManager" as Socket
+boundary "API Externa" as Ext
+
+' Topo
+QA -down- Web : "1: Iniciar v"
+Web -down- Core : "2: WS: start v"
+
+' Centro e Base
+Core -down- Worker : "3: spawn v"
+Worker -right- Ext : "4: Handshake >"
+Ext .left. Worker : "< 5: OK"
+
+Worker -down- Socket : "8: broadcast v"
+Socket -left- Web : "9: Push Data <"
+Web -right- Web : "10: Gráficos"
+
+Worker -left- Ext : "6: getStats() <"
+Ext .right. Worker : "> 7: Telemetria"
+
+Core .up. Web : "^ 12: Finished"
+Web .up. QA : "^ 13: Relatórios"
+@enduml

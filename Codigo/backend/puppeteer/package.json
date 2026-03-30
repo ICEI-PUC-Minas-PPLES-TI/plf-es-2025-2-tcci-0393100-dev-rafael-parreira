@@ -1,0 +1,12 @@
+{
+  "name": "stream-sentry-puppeteer-runner",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "puppeteer": "^24.7.1"
+  }
+}
