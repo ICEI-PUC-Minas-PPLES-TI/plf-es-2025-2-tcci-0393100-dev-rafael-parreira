@@ -1,52 +1,76 @@
 @startuml
-skinparam componentStyle uml2
+skinparam componentStyle rectangle
 skinparam linetype ortho
+skinparam rankdir TB
+skinparam nodesep 20
+skinparam ranksep 30
 
-' Estilização para clareza
-skinparam component {
-    BackgroundColor #FEFEFE
-    BorderColor #222222
+title Stream Sentry - Arquitetura Lógica (Formato Retrato A4)
+
+package "1. Interface Web (React)" #F9F9F9 {
+  component "Views: Landing, Config,\nDashboard, Analytics" as UI
 }
 
-package "Camada de Interface (React)" #F9F9F9 {
-    component [Dashboard Live] as Dash
-    component [Configurador] as Config
-    component [Analytics] as Analytics
+package "2. Servidor Core (Go)" #E8F4FC {
+  component "API REST (auth, reports)" as REST
+  component "Hub WebSocket (telemetria)" as WSHub
+  component "Orquestrador de Teste" as Orchestrator
+  component "Motor de Relatórios" as Reports
+
+  ' Força os componentes do Go a ficarem um embaixo do outro
+  REST -[hidden]down-> WSHub
+  WSHub -[hidden]down-> Orchestrator
+  Orchestrator -[hidden]down-> Reports
 }
 
-package "Camada de Orquestração (Node.js)" #F5F5F5 {
-    component [API REST] as REST
-    component [WebSocket Hub] as WSHub
-    component [Test Engine] as Engine
-    component [Report Generator] as RG
+package "3. Dados Locais (Ficheiros)" #F5F5E8 {
+  component "Utilizadores & Histórico (JSON)" as UserHist
+  component "Telemetria (NDJSON)" as TelFiles
+
+  UserHist -[hidden]down-> TelFiles
 }
 
-package "Camada de Execução (Puppeteer)" #F0F0F0 {
-    component [Worker Cluster] as Workers
+package "4. Runner de Teste (Node.js)" #F0F0F0 {
+  component "run-audit.mjs" as Script
+  component "Workers (Pool Chromium)" as Workers
+
+  Script -[hidden]down-> Workers
 }
 
-database "Camada de Dados" {
-    [PostgreSQL] as DB
+package "5. Sistemas Externos" #FFFFFF {
+  component "API Alvo (Jitsi, Meet, etc.)" as External
 }
 
-package "Provedores Externos" {
-    [WebRTC / Zoom / Jitsi] as External
-}
+' ==========================================
+' ESTRUTURA VERTICAL INVISÍVEL
+' ==========================================
+' Estas linhas forçam os pacotes a se empilharem perfeitamente
+UI -[hidden]down-> REST
+Reports -[hidden]down-> UserHist
+TelFiles -[hidden]down-> Script
+Workers -[hidden]down-> External
 
-' --- Fluxos de Controle (Setup) ---
-Config --> REST : Define parâmetros
-REST --> Engine : Inicia execução
-Engine --> Workers : Instancia N processos
+' ==========================================
+' FLUXOS DE COMUNICAÇÃO REAIS
+' ==========================================
+UI --> REST : HTTP JSON (Config)
+UI <--> WSHub : WebSocket Live
 
-' --- Fluxos de Telemetria (Hot Path - Tempo Real) ---
-Workers .up.> WSHub : Envia métricas raw
-WSHub <--> Dash : Broadcast via Socket
+REST --> Orchestrator : Comandos (/test/start)
+REST --> Reports : Exportações (CSV/JSON)
+REST ..> UserHist : Lê/Grava Auth
 
-' --- Fluxos de Persistência (Cold Path) ---
-Workers --> DB : Salva Time-series
-RG --> DB : Consulta agregada
-Analytics <-- RG : Gera JSON/CSV
+Orchestrator --> WSHub : Broadcast JSON
+Orchestrator --> Script : Spawn Processo Node
+Orchestrator ..> TelFiles : Persiste NDJSON
+Orchestrator ..> UserHist : Agrega Fim de Teste
 
-' --- Integração Externa ---
-Workers <--> External : Sessão de Vídeo
+Reports ..> TelFiles : Lê NDJSON
+Reports ..> UserHist : Lê Histórico
+
+Script ..> Orchestrator : Stdout (Telemetria)
+Script --> Workers : Lança Browsers
+
+Workers <--> External : Tráfego WebRTC / getStats()
+
 @enduml
