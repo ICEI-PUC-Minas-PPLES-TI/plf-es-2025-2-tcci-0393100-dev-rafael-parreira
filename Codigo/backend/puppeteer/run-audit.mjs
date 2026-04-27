@@ -1,4 +1,7 @@
 import puppeteer from "puppeteer";
+import { createCursor } from "ghost-cursor";
+import fs from "node:fs";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const [, , apiUrl, accessToken, virtualUsersArg] = process.argv;
@@ -8,7 +11,245 @@ const ignoreHttpsErrors = process.env.PUPPETEER_IGNORE_HTTPS_ERRORS === "1";
 const disableQuic = process.env.PUPPETEER_DISABLE_QUIC === "1";
 const slowMo = Number.parseInt(process.env.PUPPETEER_SLOW_MO || "0", 10);
 const statsIntervalMs = Number.parseInt(process.env.WEBRTC_STATS_INTERVAL_MS || "2000", 10);
+/** Com vários VUs, só inject em 1 de cada N *ticks* (1 = nunca pular) — alivia CDP. */
+const webrtcInjectEveryNTicks = Math.max(1, Number.parseInt(process.env.WEBRTC_INJECT_EVERY_N_TICKS || "1", 10) || 1);
 const dwellMs = Number.parseInt(process.env.AUDIT_PAGE_DWELL_MS || "8000", 10);
+const jitsiUseGhostCursor =
+  process.env.JITSI_USE_GHOST_CURSOR === undefined || process.env.JITSI_USE_GHOST_CURSOR !== "0";
+
+/**
+ * Login automático (Google / formulário) — **opção opt-in** (`JITSI_AUTH_ENABLED=1`).
+ * No `meet.jit.si` como convidado normalmente *não* há botão "Sign in" visível; com credenciais
+ * no .env e sem ativar, o runner **não** tenta login (evita o aviso "falhou (none)").
+ */
+const jitsiAuthEnabled = process.env.JITSI_AUTH_ENABLED === "1" || process.env.JITSI_AUTH_ENABLED === "true";
+const jitsiAuthEmail = (process.env.JITSI_AUTH_EMAIL || "").trim();
+const jitsiAuthPassword = (process.env.JITSI_AUTH_PASSWORD || "").trim();
+/** Só usado com `1` — no meet.jit.si o formulário in-page quase nunca é login; o default evita tocar em campos errados. */
+const jitsiAuthInPageEnabled = process.env.JITSI_AUTH_IN_PAGE === "1";
+/** Com `PUPPETEER_HEADFUL=1`, tenta abrir painel Sign in / conta e pausa para inspecionares a UI. */
+const jitsiDebugLoginUI =
+  process.env.JITSI_DEBUG_LOGIN_UI === "1" || process.env.JITSI_DEBUG_LOGIN_UI === "true";
+const jitsiDebugPauseMsEnv = process.env.JITSI_DEBUG_PAUSE_MS;
+const jitsiDebugPauseMsExplicit =
+  jitsiDebugPauseMsEnv !== undefined && String(jitsiDebugPauseMsEnv).trim() !== ""
+    ? Math.max(0, Number.parseInt(String(jitsiDebugPauseMsEnv), 10) || 0)
+    : null;
+
+/** Após "Entrar": espera o diálogo "Sou o anfitrião" / "I am the host" (abre o Google). `0` = não esperar. */
+const jitsiHostButtonWaitSecEnv = process.env.JITSI_HOST_BUTTON_WAIT_SEC;
+const jitsiHostButtonSkip =
+  jitsiHostButtonWaitSecEnv !== undefined && String(jitsiHostButtonWaitSecEnv).trim() === "0";
+const jitsiHostButtonWaitSec = jitsiHostButtonSkip
+  ? 0
+  : Math.min(
+      180,
+      Math.max(
+        5,
+        Number.parseInt(
+          jitsiHostButtonWaitSecEnv !== undefined && String(jitsiHostButtonWaitSecEnv).trim() !== ""
+            ? String(jitsiHostButtonWaitSecEnv)
+            : jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword
+              ? "90"
+              : "25",
+          10
+        ) || 25
+      )
+    );
+/** Subcadeia opcional (ex.: "anfitri" ou "host") se o teu Jitsi usar texto diferente. */
+const jitsiHostButtonContains = (process.env.JITSI_HOST_BUTTON_CONTAINS || "").trim();
+
+/**
+ * Após clicar em «Sou o anfitrião» (abre o Google) e/ou após o runner preencher o Google:
+ * a conferência e os RTCPeerConnection só existem *depois* de o Meet voltar à sala.
+ */
+const jitsiPostHostAuthDelayMs = Math.max(0, Number.parseInt(process.env.JITSI_POST_HOST_AUTH_DELAY_MS || "5000", 10) || 5000);
+
+/**
+ * Clicar em «Eu sou o anfitrião» abre o Google; sem completar o login ficas bloqueado.
+ * Por omissão: reivindica anfitrião **só** se `JITSI_AUTH_*` e `JITSI_AUTH_ENABLED=1` (fluxo anfitrião+Google).
+ * Forçar: `JITSI_CLAIM_HOST=1` (sempre tenta o botão) ou `=0` (nunca, perfil convidado).
+ * `JITSI_GUEST_MODE=1` é equivalente a `JITSI_CLAIM_HOST=0` + tentar convidado/dispensar o diálogo.
+ */
+const jitsiClaimHostExplicit = process.env.JITSI_CLAIM_HOST;
+const jitsiGuestModeFlag =
+  process.env.JITSI_GUEST_MODE === "1" || process.env.JITSI_SKIP_I_AM_HOST === "1" || jitsiClaimHostExplicit === "0";
+const jitsiClaimHost = jitsiGuestModeFlag
+  ? false
+  : jitsiClaimHostExplicit === "1" || jitsiClaimHostExplicit === "true"
+    ? true
+    : jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword;
+
+const poolSpawnGapMs = Number.parseInt(process.env.POOL_SPAWN_GAP_MS || "600", 10);
+const poolStateDebugMs = Number.parseInt(process.env.POOL_STATE_DEBUG_MS || "0", 10);
+const muteAudioForLoad = process.env.PUPPETEER_MUTE_AUDIO === "1";
+const disableDevShm = process.env.PUPPETEER_DISABLE_DEV_SHM === "1";
+const extraChromeArgs = (process.env.PUPPETEER_EXTRA_CHROME_ARGS || "")
+  .split(/[,\n]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+/** Se `1`, não desliga o *site isolation* (por omissão desligamos para o hook alcançar iframes Jitsi). */
+const preserveSiteIsolation = process.env.PUPPETEER_PRESERVE_SITE_ISOLATION === "1";
+/** Teto de `Page` alvo a inspecionar por browser (muitos targets CDP = ticks lentos / timeouts). */
+const maxJitsiHookPages = Math.min(16, Math.max(2, Number.parseInt(process.env.JITSI_MAX_HOOK_PAGES || "10", 10) || 10));
+
+function buildChromiumArgs() {
+  return [
+    "--no-sandbox",
+    "--disable-extensions",
+    "--disable-extensions-file-access-check",
+    // Reduz iframes em processo separado (Jitsi + hook RTCPeerConnection). Opcional: PUPPETEER_PRESERVE_SITE_ISOLATION=1
+    ...(preserveSiteIsolation
+      ? []
+      : [
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--disable-site-isolation-trials"
+        ]),
+    ...(disableQuic ? ["--disable-quic"] : []),
+    ...(disableDevShm ? ["--disable-dev-shm-usage"] : []),
+    ...(muteAudioForLoad ? ["--mute-audio"] : []),
+    "--autoplay-policy=no-user-gesture-required",
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+    ...extraChromeArgs
+  ];
+}
+
+/** Concorrência dinâmica (pool): ativar com STREAM_SENTRY_POOL=1 — mantém N utilizadores até parar o teste. */
+const streamSentryPool =
+  process.env.STREAM_SENTRY_POOL === "1" || process.env.STREAM_SENTRY_POOL === "true";
+
+const sessionIdEnv = process.env.TEST_SESSION_ID || "";
+const testStartedAtMs = (() => {
+  const raw = process.env.TEST_STARTED_AT;
+  if (!raw) return Date.now();
+  const d = Date.parse(raw);
+  return Number.isNaN(d) ? Date.now() : d;
+})();
+
+function controlFilePath() {
+  return path.join(process.cwd(), "puppeteer", "control.json");
+}
+
+function readControlSync() {
+  try {
+    const raw = fs.readFileSync(controlFilePath(), "utf8");
+    const j = JSON.parse(raw);
+    return {
+      paused: Boolean(j.paused),
+      targetVirtualUsers: Number.isFinite(Number(j.targetVirtualUsers))
+        ? Math.min(50, Math.max(1, Number(j.targetVirtualUsers)))
+        : virtualUsers,
+      chaos: { profile: typeof j.chaos?.profile === "string" ? j.chaos.profile : "off" }
+    };
+  } catch {
+    return {
+      paused: false,
+      targetVirtualUsers: virtualUsers,
+      chaos: { profile: "off" }
+    };
+  }
+}
+
+function elapsedSec() {
+  return (Date.now() - testStartedAtMs) / 1000;
+}
+
+const lastChaosByBrowser = new WeakMap();
+let flakyToggle = false;
+
+function normalizeProfileKey(profileRaw) {
+  let k = String(profileRaw || "off")
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (k === "slow3g") return "slow_3g";
+  if (k === "fast3g") return "fast_3g";
+  return k;
+}
+
+/** Uma decisão de toggle por *tick* (todos os browsers partilham o mesmo estado em flaky). */
+function resolveEffectivePresetKey(profileRaw) {
+  const k = normalizeProfileKey(profileRaw);
+  if (k === "flaky") {
+    flakyToggle = !flakyToggle;
+    return flakyToggle ? "offline" : "fast_3g";
+  }
+  return k;
+}
+
+function networkPresets() {
+  return {
+    off: { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+    none: { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+    slow_3g: { offline: false, latency: 400, downloadThroughput: (400 * 1024) / 8, uploadThroughput: (400 * 1024) / 8 },
+    fast_3g: { offline: false, latency: 150, downloadThroughput: (1800 * 1024) / 8, uploadThroughput: (850 * 1024) / 8 },
+    high_latency: {
+      offline: false,
+      latency: 850,
+      downloadThroughput: (350 * 1024) / 8,
+      uploadThroughput: (350 * 1024) / 8
+    },
+    offline: { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
+    dns_failure: { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 }
+  };
+}
+
+async function applyPresetToBrowser(browser, profileRaw, effectiveKey) {
+  const mapKey = `${String(profileRaw)}:${effectiveKey}`;
+  if (lastChaosByBrowser.get(browser) === mapKey) return;
+  lastChaosByBrowser.set(browser, mapKey);
+
+  const presets = networkPresets();
+  const p = presets[effectiveKey] || presets.off;
+  try {
+    const pages = await browser.pages();
+    const page = pages[0] || (await browser.newPage());
+    const client = await page.createCDPSession();
+    await client.send("Network.enable");
+    await client.send("Network.emulateNetworkConditions", {
+      offline: p.offline,
+      latency: p.latency,
+      downloadThroughput: p.downloadThroughput,
+      uploadThroughput: p.uploadThroughput,
+      connectionType: "ethernet"
+    });
+  } catch {
+    /* CDP indisponível */
+  }
+}
+
+const activeBrowsers = new Set();
+
+async function applyChaosToAllBrowsers(profileRaw) {
+  const eff = resolveEffectivePresetKey(profileRaw);
+  const raw = String(profileRaw || "off");
+  for (const b of activeBrowsers) {
+    try {
+      if (b.isConnected()) await applyPresetToBrowser(b, raw, eff);
+    } catch {
+      activeBrowsers.delete(b);
+    }
+  }
+}
+
+async function dwellWithControls(ms, opts) {
+  const signal = opts?.signal;
+  const getControl = typeof opts?.getControl === "function" ? opts.getControl : readControlSync;
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (signal?.aborted) return;
+    let c = getControl();
+    while (c.paused && !signal?.aborted) {
+      await delay(400);
+      c = getControl();
+    }
+    if (signal?.aborted) return;
+    const step = Math.min(400, end - Date.now());
+    if (step <= 0) break;
+    await delay(step);
+  }
+}
 
 if (!apiUrl || !accessToken || Number.isNaN(virtualUsers)) {
   console.error("Missing required arguments: apiUrl accessToken virtualUsers");
@@ -16,7 +257,13 @@ if (!apiUrl || !accessToken || Number.isNaN(virtualUsers)) {
 }
 
 function emit(obj) {
-  process.stdout.write(`${JSON.stringify(obj)}\n`);
+  const payload = {
+    ...obj,
+    ...(sessionIdEnv ? { sessionId: sessionIdEnv } : {}),
+    elapsedSec: elapsedSec(),
+    ts: obj.ts || new Date().toISOString()
+  };
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
 /**
@@ -58,6 +305,7 @@ function installStreamSentryRtcHook() {
       wrap("addTransceiver");
       wrap("createDataChannel");
       wrap("createOffer");
+      wrap("getStats");
       wrap("setLocalDescription");
       wrap("setRemoteDescription");
     }
@@ -125,9 +373,23 @@ async function attachRtcHookToTarget(target) {
   }
 }
 
+/**
+ * Em alguns alvos OOPIF / segundo `Page`, `page.frames()` vem vazio; o `mainFrame()` ainda permite inject + getStats.
+ */
+function getFramesForPage(page) {
+  const list = page.frames();
+  if (list && list.length > 0) return list;
+  try {
+    const mf = page.mainFrame();
+    return mf ? [mf] : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Reaplica o hook em todos os frames já carregados (lib-jitsi pode carregar depois do CDP inicial). */
 async function injectRtcHookIntoAllFrames(page) {
-  for (const frame of page.frames()) {
+  for (const frame of getFramesForPage(page)) {
     try {
       await frame.evaluate(installStreamSentryRtcHook);
     } catch {
@@ -138,7 +400,7 @@ async function injectRtcHookIntoAllFrames(page) {
 
 /** Conta PCs e frames numa única Page (vários Frame no mesmo processo). */
 async function probeWebRtcFrames(page) {
-  const frames = page.frames();
+  const frames = getFramesForPage(page);
   const rows = [];
   for (const frame of frames) {
     try {
@@ -173,29 +435,38 @@ async function probeWebRtcFrames(page) {
 }
 
 /**
- * Todas as `Page` do browser (inclui iframes OOPIF).
- * No Chromium recente o tipo CDP pode ser `page` ou `iframe`; usamos qualquer target com `.page()`.
+ * Todas as `Page` do browser (Jitsi em OOPIF / targets variados: não filtrar por
+ * `target.type()` — nalguns builds o alvo do iframe não é exactamente "iframe"/"page"
+ * e deixaríamos de amostrar a frame onde ocorre o WebRTC.
  */
 async function allPageTargets(browser) {
   const out = [];
-  const seen = new Set();
+  const seenPage = new Set();
   for (const target of browser.targets()) {
     try {
       const p = await target.page();
-      if (!p || seen.has(p)) continue;
-      seen.add(p);
+      if (!p || seenPage.has(p)) continue;
+      seenPage.add(p);
       out.push(p);
     } catch {
       /* worker, service_worker, etc. */
     }
   }
-  return out;
+  return out.length > maxJitsiHookPages ? out.slice(0, maxJitsiHookPages) : out;
 }
 
 async function injectRtcHookEverywhere(browser) {
-  const pages = await allPageTargets(browser);
-  for (const p of pages) {
-    await injectRtcHookIntoAllFrames(p);
+  try {
+    const pages = await allPageTargets(browser);
+    for (const p of pages) {
+      try {
+        await injectRtcHookIntoAllFrames(p);
+      } catch {
+        /* página a fechar / corrida */
+      }
+    }
+  } catch {
+    /* browser a encerrar */
   }
 }
 
@@ -222,6 +493,348 @@ async function probeWebRtcBrowser(browser) {
   };
 }
 
+/**
+ * Clique com movimento de rato “humano” (ghost-cursor) — ajuda em UIs que ignoram el.click() síncrono.
+ */
+async function tryGhostCursorClickJitsiJoin(page) {
+  if (!jitsiUseGhostCursor) return false;
+  try {
+    const cursor = createCursor(page);
+    const selectors = [
+      '[data-testid="prejoin.joinButton"]',
+      '[data-testid="lobby.joinButton"]',
+      '[data-testid="prejoin.joinMeeting"]',
+      'button[aria-label="Join meeting"]',
+      'button[aria-label*="Join meeting" i]',
+      'button[aria-label*="Entrar" i]',
+      "#jitsi_prejoin_join_button",
+      "button.join-meeting"
+    ];
+    for (const sel of selectors) {
+      const h = await page.$(sel);
+      if (!h) continue;
+      const box = await h.boundingBox();
+      if (box && box.width > 2 && box.height > 2) {
+        await cursor.click(h);
+        await h.dispose();
+        return true;
+      }
+      await h.dispose();
+    }
+  } catch {
+    /* elemento destacado / navegação */
+  }
+  return false;
+}
+
+/**
+ * Diálogo pós-join (sala com autenticação de moderador / meet.jit.si): "I am the host" / "Sou o anfitrião" → abre o login.
+ */
+async function tryGhostCursorClickJitsiHostButton(page) {
+  if (!jitsiUseGhostCursor) return false;
+  if (jitsiHostButtonContains) {
+    try {
+      const clicked = await page.evaluate((hint) => {
+        if (!hint) return false;
+        const s = String(hint).toLowerCase();
+        const inDialog = document.querySelectorAll(
+          "div[role=dialog] button, [role=dialog] button, [role=dialog] [role=button], .jitsi-dialog button"
+        );
+        for (const b of inDialog) {
+          const t = (b.textContent || "").toLowerCase();
+          const a = (b.getAttribute("aria-label") || "").toLowerCase();
+          if (t.includes(s) || a.includes(s)) {
+            b.scrollIntoView({ block: "center" });
+            b.click();
+            return true;
+          }
+        }
+        return false;
+      }, jitsiHostButtonContains);
+      if (clicked) return true;
+    } catch {
+      /* */
+    }
+  }
+  try {
+    const cursor = createCursor(page);
+    const selectors = [
+      '[data-testid="modal-dialog-ok-button"]',
+      '[data-testid="ok-button"]',
+      "button[aria-label=\"I am the host\" i]",
+      "button[aria-label*=\"I’m the host\" i]",
+      "button[aria-label*=\"anfitri\" i]",
+      "button[aria-label*=\"the host\" i]",
+      "div[role=dialog] button.jitsi-button--primary"
+    ];
+    for (const sel of selectors) {
+      const h = await page.$(sel);
+      if (!h) continue;
+      const box = await h.boundingBox();
+      if (box && box.width > 2 && box.height > 2) {
+        await cursor.click(h);
+        await h.dispose();
+        return true;
+      }
+      await h.dispose();
+    }
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+/**
+ * Clica o botão de anfitrião/moderador após o join, quando a UI carrega o diálogo (≈1–90s).
+ * Deve ser chamado *depois* de tryJitsiEnterConference, *antes* do login Google.
+ */
+async function tryJitsiClickAfterJoinHostButton(page, userId) {
+  if (jitsiHostButtonWaitSec <= 0) {
+    emit({
+      type: "telemetry",
+      event: "jitsi_host_button",
+      userId,
+      skipped: true,
+      message: "JITSI_HOST_BUTTON_WAIT_SEC=0 — a saltar a espera pelo botão de anfitrião."
+    });
+    return false;
+  }
+  const gapMs = 600;
+  const maxAttempts = Math.max(8, Math.ceil((jitsiHostButtonWaitSec * 1000) / gapMs));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const r = await page
+      .evaluate((hint) => {
+        const seen = new Set();
+        const clickIfVisible = (el) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none")
+            return false;
+          const r0 = el.getBoundingClientRect();
+          if (r0.width < 2 || r0.height < 2) return false;
+          el.scrollIntoView({ block: "center", inline: "center" });
+          el.click();
+          return true;
+        };
+
+        function isHostOrModeratorLabel(h) {
+          const s = h.toLowerCase();
+          if (s.length > 200) return false;
+          if (/\b(leave|hang up|sair|cancel|voltar|back)\b/i.test(s) && s.length < 36 && !/host|anfitri|moderad/.test(s))
+            return false;
+          if (/\bjoin meeting\b|\bentrar na reuni(n|ã)o\b|\bentrar agora\b/.test(s) && !/host|anfitri|moderad/.test(s))
+            return false;
+          if (hint) {
+            const h2 = String(hint).toLowerCase();
+            if (s.includes(h2)) return true;
+          }
+          return (
+            /\b(i['\u2019]m\s+the\s+host|i\s+am\s+the\s+host|i['\u2019]m\s+the\s+moderator|i\s+am\s+the\s+moderator)\b/i.test(
+              s
+            ) ||
+            /\b(sou\s+o\s+anfitri|eu\s+sou\s+o\s+anfitri|sou\s+o\s+moderador|sou\s+anfitri)\b/i.test(s) ||
+            /\b(soy\s+el\s+anfitr|soy\s+el\s+moderador|soy\s+el\s+anfitr)\b/i.test(s) ||
+            /\b(claim|reivindic).{0,24}(moderat|host|anfitr)/i.test(s) ||
+            /\blog\s+in\s+as\s+host\b/i.test(s)
+          );
+        }
+
+        function walk(doc, depth) {
+          if (!doc || depth > 12) return null;
+          if (seen.has(doc)) return null;
+          seen.add(doc);
+          const candidates = doc.querySelectorAll(
+            "button, [role=button], input[type=submit], a[role=button], a.jitsi-button"
+          );
+          for (const b of candidates) {
+            const t = (b.innerText || b.textContent || b.value || "").trim();
+            const al = (b.getAttribute("aria-label") || "").trim();
+            const title = (b.getAttribute("title") || "").trim();
+            const hay = `${t} ${al} ${title}`.replace(/\s+/g, " ");
+            if (isHostOrModeratorLabel(hay) && t.length < 200) {
+              if (clickIfVisible(b)) return { clicked: true, how: "text", label: t.slice(0, 60) || al.slice(0, 60) };
+            }
+          }
+          const iframes = doc.querySelectorAll("iframe");
+          for (const iframe of iframes) {
+            try {
+              const ch = iframe.contentDocument;
+              if (ch) {
+                const w = walk(ch, depth + 1);
+                if (w) return w;
+              }
+            } catch {
+              /* cross-origin */
+            }
+          }
+          return null;
+        }
+
+        return walk(document, 0) || { clicked: false };
+      }, jitsiHostButtonContains)
+      .catch((e) => ({ clicked: false, error: String(e?.message || e) }));
+
+    if (r && r.clicked) {
+      await delay(900);
+      emit({
+        type: "telemetry",
+        event: "jitsi_host_button",
+        userId,
+        ok: true,
+        method: r.how || "text",
+        label: r.label,
+        attempt: attempt + 1
+      });
+      return true;
+    }
+    if (attempt % 3 === 2) {
+      if (await tryGhostCursorClickJitsiHostButton(page)) {
+        await delay(900);
+        emit({
+          type: "telemetry",
+          event: "jitsi_host_button",
+          userId,
+          ok: true,
+          method: "ghost",
+          attempt: attempt + 1
+        });
+        return true;
+      }
+    }
+    await delay(gapMs);
+  }
+  emit({
+    type: "telemetry",
+    event: "jitsi_host_button",
+    userId,
+    ok: false,
+    attempts: maxAttempts,
+    message: "Não encontrou o botão de anfitrião/moderador. Defina JITSI_HOST_BUTTON_CONTAINS ou aumente JITSI_HOST_BUTTON_WAIT_SEC (headful se necessário)."
+  });
+  return false;
+}
+
+/**
+ * Quando `JITSI_CLAIM_HOST=0` (ou sem `JITSI_AUTH_*`): **não** clica em «Sou o anfitrião».
+ * Tenta «continuar como convidado» / equivalente, ou **Cancel/Voltar** no diálogo de anfitrião (UI dependente).
+ */
+async function tryJitsiGuestOrDismissHostDialog(page, userId) {
+  const gapMs = 600;
+  const maxAttempts = 40;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const r = await page
+      .evaluate(() => {
+        const inDialog = (el) => el && el.closest && (el.closest("[role=dialog]") || el.closest(".jitsi-dialog"));
+
+        const clickIfVisible = (el) => {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none")
+            return false;
+          const r0 = el.getBoundingClientRect();
+          if (r0.width < 2 || r0.height < 2) return false;
+          el.scrollIntoView({ block: "center", inline: "center" });
+          el.click();
+          return true;
+        };
+
+        const candidates = document.querySelectorAll("button, [role=button], a[role=button], .jitsi-button");
+        for (const b of candidates) {
+          if (!inDialog(b)) continue;
+          const t = (b.innerText || b.textContent || "").trim();
+          const al = (b.getAttribute("aria-label") || "").trim();
+          const hay = `${t} ${al}`.toLowerCase();
+          if (hay.length > 180) continue;
+          if (
+            /\b(continue|join)\s+as\s+guest\b/i.test(hay) ||
+            /continu.*(como|com)\s*convidad|entrar como convid|como convid|participar.*convid|sem (fazer|iniciar) sess(ã|a)o|without signing/i.test(
+              hay
+            ) ||
+            /^convidad(o|a)?$/i.test(t)
+          ) {
+            if (clickIfVisible(b)) return { how: "guest", label: t.slice(0, 80) || al.slice(0, 80) };
+          }
+        }
+        for (const b of candidates) {
+          if (!inDialog(b)) continue;
+          const t = (b.innerText || b.textContent || "").trim();
+          const d = b.closest("[role=dialog], .jitsi-dialog, [role=alertdialog]");
+          if (!d) continue;
+          const dialogText = (d.textContent || "").toLowerCase();
+          if (!/(anfitri|host|moderat|dono|owner|sign in|iniciar sess|google)/i.test(dialogText)) continue;
+          if (
+            t.length < 40 &&
+            /^(cancel|voltar|back|not now|no thanks|fechar|close|mais tarde|later)$/i.test(t)
+          ) {
+            if (clickIfVisible(b)) return { how: "dismiss", label: t };
+          }
+        }
+        return null;
+      })
+      .catch((e) => ({ error: String(e?.message || e) }));
+
+    if (r && r.how) {
+      await delay(900);
+      emit({
+        type: "telemetry",
+        event: "jitsi_guest_path",
+        userId,
+        ok: true,
+        method: r.how,
+        label: r.label,
+        attempt: attempt + 1
+      });
+      return true;
+    }
+    await delay(gapMs);
+  }
+  emit({
+    type: "telemetry",
+    event: "jitsi_guest_path",
+    userId,
+    ok: false,
+    message:
+      "Perfil sem reivindicar anfitrião: não encontrei convidado/cancel. Se a política da sala exigir anfitrião, use JITSI_CLAIM_HOST=1 e JITSI_AUTH_*, ou PUPPETEER_HEADFUL=1."
+  });
+  return false;
+}
+
+/**
+ * Formulário e-mail+senha na *welcome* (self-hosted), antes de entrar — só com JITSI_AUTH_IN_PAGE=1.
+ */
+async function tryJitsiInPagePasswordLogin(page, userId) {
+  if (!jitsiAuthEnabled || !jitsiAuthEmail || !jitsiAuthPassword) {
+    return;
+  }
+  if (!jitsiAuthInPageEnabled) {
+    return;
+  }
+  emit({ type: "telemetry", event: "jitsi_auth_attempt", userId, provider: "env", phase: "in_page" });
+  try {
+    if (await tryInPageEmailPasswordForm(page, jitsiAuthEmail, jitsiAuthPassword)) {
+      emit({ type: "telemetry", event: "jitsi_auth_result", userId, ok: true, method: "in_page_form" });
+    } else {
+      emit({
+        type: "telemetry",
+        event: "jitsi_auth_result",
+        userId,
+        ok: false,
+        method: "in_page_form",
+        message: "sem campos e-mail+senha visíveis (normal no meet.jit.si; use login pós-join com Google)"
+      });
+    }
+  } catch (e) {
+    emit({
+      type: "telemetry",
+      event: "jitsi_auth_result",
+      userId,
+      ok: false,
+      method: "in_page_form",
+      message: String(e?.message || e).slice(0, 200)
+    });
+  }
+}
+
 function isJitsiHost(urlStr) {
   try {
     const h = new URL(urlStr).hostname.toLowerCase();
@@ -234,6 +847,309 @@ function isJitsiHost(urlStr) {
   } catch {
     return false;
   }
+}
+
+async function tryInPageEmailPasswordForm(page, email, password) {
+  try {
+    const emailField =
+      (await page.$('input[type="email"]')) ||
+      (await page.$('input[autocomplete="username"]')) ||
+      (await page.$('input[name="username"]')) ||
+      (await page.$('input[name="email"]'));
+    const passField = await page.$('input[type="password"]');
+    if (!emailField || !passField) return false;
+    await emailField.click({ clickCount: 3 });
+    await emailField.type(email, { delay: 12 });
+    await passField.type(password, { delay: 12 });
+    const submit = await page.$("button[type='submit'], input[type='submit']");
+    if (submit) await submit.click();
+    else await page.keyboard.press("Enter");
+    await delay(2500);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tryClickGoogleOrSignInOpenerInDocument() {
+  const g = document.querySelector('a[href*="accounts.google.com"]');
+  if (g) {
+    g.click();
+    return "google_href";
+  }
+  const candidates = [...document.querySelectorAll("a, button, [role='button']")];
+  for (const el of candidates) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    const al = (el.getAttribute("aria-label") || "").toLowerCase();
+    const hay = `${t} ${al}`;
+    if (/\b(google|gmail)\b/.test(hay) && (/\bsign in\b/.test(hay) || /\blog in\b/.test(hay))) {
+      el.click();
+      return "google_cta";
+    }
+    if ((t === "sign in" || t === "log in" || al === "sign in" || al === "log in") && t.length < 40) {
+      el.click();
+      return "sign_in";
+    }
+  }
+  return "";
+}
+
+async function tryOpenJitsiSignInEntry(page) {
+  return page.evaluate(tryClickGoogleOrSignInOpenerInDocument);
+}
+
+async function getGoogleSignInPage(browser, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pages = await browser.pages();
+    for (const p of pages) {
+      try {
+        const u = p.url();
+        if (
+          (u.includes("accounts.google.com") || u.includes("id.google.com")) &&
+          (u.includes("signin") || u.includes("ServiceLogin") || u.includes("oauth") || u.includes("o/oauth2") || u.includes("challenge"))
+        ) {
+          return p;
+        }
+      } catch {
+        /* */
+      }
+    }
+    await delay(200);
+  }
+  return null;
+}
+
+async function fillGoogleSignInPage(googlePage, email, password) {
+  await googlePage.bringToFront().catch(() => {});
+  await googlePage
+    .waitForSelector("#identifierId, input[name='identifierId'], input[type='email']", { timeout: 25000, visible: true })
+    .catch(() => null);
+  const idInput =
+    (await googlePage.$("#identifierId")) ||
+    (await googlePage.$('input[name="identifierId"]')) ||
+    (await googlePage.$('input[type="email"]'));
+  if (!idInput) return "no_email_field";
+  await idInput.type(email, { delay: 15 });
+  await delay(400);
+  const idNext = await googlePage.$("#identifierNext");
+  if (idNext) await idNext.click();
+  else await googlePage.keyboard.press("Enter");
+  await delay(2500);
+  const u = googlePage.url();
+  if (u.includes("challenge/") && !u.includes("password")) {
+    return "2fa_or_challenge";
+  }
+  const passInput =
+    (await googlePage.$("input[name='Passwd']")) || (await googlePage.$('input[name="password"]')) || (await googlePage.$("input[type='password']"));
+  if (!passInput) {
+    if (u.includes("myaccount.google.com") || u.includes("signin/chooser")) {
+      return "ok_maybe_already";
+    }
+    return "no_password_field";
+  }
+  await passInput.type(password, { delay: 15 });
+  await delay(400);
+  const passNext = (await googlePage.$("#passwordNext")) || (await googlePage.$("button[type='submit']"));
+  if (passNext) await passNext.click();
+  else await googlePage.keyboard.press("Enter");
+  await delay(5000);
+  if (googlePage.url().includes("challenge/")) {
+    return "2fa_or_challenge";
+  }
+  return "ok";
+}
+
+/**
+ * Após o join (e idealmente após "Sou o anfitrião"), abre Sign in e preenche o Google.
+ * O formulário e-mail+senha na welcome usa tryJitsiInPagePasswordLogin (antes do join) com JITSI_AUTH_IN_PAGE=1.
+ */
+async function tryJitsiServiceLogin(page, browser, userId) {
+  if (!jitsiAuthEnabled) {
+    return { ok: false, reason: "auth_disabled" };
+  }
+  if (!jitsiAuthEmail || !jitsiAuthPassword) {
+    return { ok: false, reason: "not_configured" };
+  }
+  emit({ type: "telemetry", event: "jitsi_auth_attempt", userId, provider: "env", phase: "google" });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await delay(2000);
+    const clicked = await tryOpenJitsiSignInEntry(page);
+    if (!clicked) {
+      if (attempt === 0) continue;
+      break;
+    }
+    await delay(1000);
+    const gPage = await getGoogleSignInPage(browser, 20000);
+    if (!gPage) {
+      if (attempt === 1) {
+        emit({
+          type: "telemetry",
+          event: "jitsi_auth_result",
+          userId,
+          ok: false,
+          method: "google",
+          message: "A página de login Google não abriu a tempo (use headful e confira a UI)."
+        });
+        return { ok: false, reason: "no_google_page" };
+      }
+      continue;
+    }
+    const r = await fillGoogleSignInPage(gPage, jitsiAuthEmail, jitsiAuthPassword);
+    if (r === "2fa_or_challenge" || r === "no_email_field" || r === "no_password_field") {
+      emit({
+        type: "telemetry",
+        event: "jitsi_auth_result",
+        userId,
+        ok: false,
+        method: "google",
+        message:
+          r === "2fa_or_challenge"
+            ? "Google pediu confirmação/2FA — use PUPPETEER_HEADFUL=1 e conclua manualmente."
+            : "Não foi possível preencher o formulário Google (seletor ou ecrã inesperado)."
+      });
+      return { ok: false, reason: r };
+    }
+    for (let w = 0; w < 30; w++) {
+      await delay(500);
+      for (const p of await browser.pages()) {
+        try {
+          if (isJitsiHost(p.url())) {
+            await p.bringToFront();
+            emit({ type: "telemetry", event: "jitsi_auth_result", userId, ok: true, method: "google" });
+            return { ok: true, reason: "google" };
+          }
+        } catch {
+          /* */
+        }
+      }
+    }
+    emit({
+      type: "telemetry",
+      event: "jitsi_auth_result",
+      userId,
+      ok: r === "ok" || r === "ok_maybe_already",
+      method: "google",
+      message: "Login Google concluído; confira se a aba do Jitsi voltou a ficar ativa (headful se necessário)."
+    });
+    return { ok: r === "ok" || r === "ok_maybe_already", reason: "google" };
+  }
+  emit({
+    type: "telemetry",
+    event: "jitsi_auth_result",
+    userId,
+    ok: false,
+    method: "none",
+    message: "Não encontrei botão/linha de Sign in ou página Google. Ajuste a UI ou use headful."
+  });
+  return { ok: false, reason: "no_entry" };
+}
+
+/** Depois de abrir o Google, o alvo a clicar "Entrar" pode ser outra aba; preferir a URL da sala. */
+async function pickJitsiPageForConference(browser, apiUrl) {
+  let roomKey = "";
+  try {
+    const u = new URL(apiUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    roomKey = (parts[0] || "").toLowerCase();
+  } catch {
+    /* */
+  }
+  const list = await browser.pages();
+  const jitsiPages = [];
+  for (const p of list) {
+    try {
+      if (isJitsiHost(p.url())) jitsiPages.push(p);
+    } catch {
+      /* */
+    }
+  }
+  if (jitsiPages.length === 0) return null;
+  if (roomKey) {
+    const hit = jitsiPages.find((p) => p.url().toLowerCase().includes(roomKey));
+    if (hit) return hit;
+  }
+  return jitsiPages[0];
+}
+
+/**
+ * Tenta pôr no ecrã opções de Sign in / anfitrião / conta (útil com headful).
+ * A UI do Jitsi muda; isto é best-effort. Emite `jitsi_login_ui_reveal` com o que encontrou.
+ */
+async function tryRevealJitsiLoginUIFromPage(page, userId) {
+  const result = await page
+    .evaluate(() => {
+      const clicks = [];
+      const click = (el, label) => {
+        if (!el) return false;
+        try {
+          const r = el.getBoundingClientRect();
+          const st = window.getComputedStyle(el);
+          if (st.display === "none" || st.visibility === "hidden" || r.width < 2 || r.height < 2) {
+            return false;
+          }
+          el.scrollIntoView({ block: "center", inline: "center" });
+          el.click();
+          clicks.push(label);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      for (const sel of [
+        'a[href*="accounts.google.com"]',
+        'a[href*="auth"]',
+        'a[href*="signin" i]',
+        "a#openLogin",
+        "button#openLogin"
+      ]) {
+        if (click(document.querySelector(sel), sel)) {
+          return { ok: true, clicks };
+        }
+      }
+      for (const sel of [
+        '[data-testid="prejoin.login"]',
+        '[data-testid="lobby.authenticateAndJoinButton"]',
+        ".welcome-page-header .sign-in a",
+        ".welcome-card-column a[href]"
+      ]) {
+        if (click(document.querySelector(sel), sel)) {
+          return { ok: true, clicks };
+        }
+      }
+      const all = document.querySelectorAll("a, button, [role=button], div[role=button], span[role=button]");
+      for (const el of all) {
+        const tx = (el.textContent || "").trim();
+        const t = tx.toLowerCase();
+        const al = (el.getAttribute("aria-label") || "").toLowerCase();
+        const h = `${t} ${al}`;
+        if (t.length > 120) continue;
+        if (
+          /^(sign in|log in|entrar|iniciar sess[ãa]o|account|conta)$/.test(t) ||
+          (/\bsign in\b/.test(h) && !/\bjoin meeting\b/.test(h)) ||
+          (/\bhost\b.*\b(only|key)\b/i.test(t) && h.length < 100) ||
+          /\b(anfitrião|moderad|sou o anfit|claim moderator|i\s*'?m\s*the\s*host|host\s*only|admin)\b/i.test(
+            t + " " + al
+          ) ||
+          (/\badmin(istrator|istrador)?\b/i.test(t) && t.length < 80)
+        ) {
+          if (click(el, `text:${tx.slice(0, 48)}`)) {
+            return { ok: true, clicks };
+          }
+        }
+      }
+      for (const sel of [".toolbox .toolbox-button", ".toolbox-content button", ".profile-button", "header a"]) {
+        if (click(document.querySelector(sel), sel)) {
+          return { ok: true, clicks };
+        }
+      }
+      return { ok: false, clicks, note: "nenhum seletor conhecido" };
+    })
+    .catch((e) => ({ ok: false, clicks: [], error: String(e?.message || e) }));
+
+  emit({ type: "telemetry", event: "jitsi_login_ui_reveal", userId, result });
+  return result;
 }
 
 /** Pré-sala / cookies: percorre documento + iframes same-origin e tenta vários seletores da UI atual do Jitsi. */
@@ -277,6 +1193,8 @@ async function tryJitsiEnterConference(page) {
           'button[aria-label="Join meeting"]',
           'button[aria-label*="Join meeting"]',
           '[role="button"][aria-label*="Join meeting"]',
+          'button[aria-label*="Entrar na reunião" i]',
+          'button[aria-label*="Entrar" i]',
           "#jitsi_prejoin_join_button",
           "button.join-meeting",
           ".join-meeting-container button",
@@ -324,11 +1242,18 @@ async function tryJitsiEnterConference(page) {
       return walk(document, 0);
     });
 
-    if (action === "cookie") {
+    let resolved = action;
+    if (!resolved && jitsiUseGhostCursor) {
+      if (await tryGhostCursorClickJitsiJoin(page)) {
+        resolved = "ghost-cursor";
+      }
+    }
+
+    if (resolved === "cookie") {
       await delay(600);
       continue;
     }
-    if (action) {
+    if (resolved) {
       await delay(1500);
       return true;
     }
@@ -386,49 +1311,124 @@ function emptyWebRtcSummary() {
 }
 
 async function collectStatsFromSingleFrame(frame) {
-  return frame.evaluate(async () => {
-    const G = typeof globalThis !== "undefined" ? globalThis : self;
-    const pcs = G.__streamSentryPCs || [];
-    const summary = {
-      peerConnections: pcs.filter((p) => p.connectionState !== "closed").length,
-      inboundAudio: {
-        packetsReceived: 0,
-        packetsLost: 0,
-        jitter: null,
-        bytesReceived: 0,
-        audioLevel: null
-      },
-      inboundVideo: {
-        packetsReceived: 0,
-        packetsLost: 0,
-        jitter: null,
-        bytesReceived: 0,
-        framesDecoded: 0,
-        framesDropped: 0,
-        frameWidth: null,
-        frameHeight: null,
-        framesPerSecond: null,
-        totalDecodeTime: null,
-        qpSum: null
-      },
-      outboundAudio: { packetsSent: 0, bytesSent: 0 },
-      outboundVideo: {
-        packetsSent: 0,
-        bytesSent: 0,
-        framesEncoded: 0,
-        framesPerSecond: null,
-        qualityLimitationReason: null,
-        totalEncodeTime: null,
-        qpSum: null
-      },
-      candidatePair: {
-        currentRoundTripTimeMs: null,
-        availableOutgoingBitrate: null,
-        nominated: false
-      },
-      remoteInbound: { audioRoundTripTimeMs: null, videoRoundTripTimeMs: null },
-      transport: { bytesSent: 0, bytesReceived: 0, dtlsState: null }
-    };
+  return frame.evaluate(
+    async (hookSource) => {
+      try {
+        (0, eval)(hookSource);
+      } catch {
+        /* contexto sem eval / isolado */
+      }
+      const G = typeof globalThis !== "undefined" ? globalThis : self;
+      function findPcsFromJitsiGlobals() {
+        const Ctor = G.RTCPeerConnection;
+        if (typeof Ctor !== "function") return [];
+        const found = [];
+        const add = (x) => {
+          try {
+            if (x && x instanceof Ctor && !found.includes(x)) found.push(x);
+          } catch {
+            /* */
+          }
+        };
+        const walk = (obj, depth) => {
+          if (!obj || typeof obj !== "object" || depth > 2) return;
+          add(obj);
+          let keys;
+          try {
+            keys = Object.keys(obj);
+          } catch {
+            return;
+          }
+          for (let i = 0; i < keys.length && i < 60; i++) {
+            const k = keys[i];
+            let v;
+            try {
+              v = obj[k];
+            } catch {
+              continue;
+            }
+            add(v);
+            if (v && typeof v === "object" && depth < 2) {
+              let k2s;
+              try {
+                k2s = Object.keys(v);
+              } catch {
+                continue;
+              }
+              for (let j = 0; j < k2s.length && j < 40; j++) {
+                let w;
+                try {
+                  w = v[k2s[j]];
+                } catch {
+                  continue;
+                }
+                add(w);
+              }
+            }
+          }
+        };
+        try {
+          if (G.APP) walk(G.APP, 0);
+        } catch {
+          /* */
+        }
+        try {
+          if (G.JitsiMeetJS) walk(G.JitsiMeetJS, 0);
+        } catch {
+          /* */
+        }
+        return found;
+      }
+      const fromHook = G.__streamSentryPCs || [];
+      const fromJitsi = findPcsFromJitsiGlobals();
+      const dedup = new Set();
+      const pcs = [];
+      for (const p of [...fromHook, ...fromJitsi]) {
+        if (!p || p.connectionState === "closed") continue;
+        if (dedup.has(p)) continue;
+        dedup.add(p);
+        pcs.push(p);
+      }
+      const summary = {
+        peerConnections: pcs.length,
+        inboundAudio: {
+          packetsReceived: 0,
+          packetsLost: 0,
+          jitter: null,
+          bytesReceived: 0,
+          audioLevel: null
+        },
+        inboundVideo: {
+          packetsReceived: 0,
+          packetsLost: 0,
+          jitter: null,
+          bytesReceived: 0,
+          framesDecoded: 0,
+          framesDropped: 0,
+          frameWidth: null,
+          frameHeight: null,
+          framesPerSecond: null,
+          totalDecodeTime: null,
+          qpSum: null
+        },
+        outboundAudio: { packetsSent: 0, bytesSent: 0 },
+        outboundVideo: {
+          packetsSent: 0,
+          bytesSent: 0,
+          framesEncoded: 0,
+          framesPerSecond: null,
+          qualityLimitationReason: null,
+          totalEncodeTime: null,
+          qpSum: null
+        },
+        candidatePair: {
+          currentRoundTripTimeMs: null,
+          availableOutgoingBitrate: null,
+          nominated: false
+        },
+        remoteInbound: { audioRoundTripTimeMs: null, videoRoundTripTimeMs: null },
+        transport: { bytesSent: 0, bytesReceived: 0, dtlsState: null }
+      };
 
     const rtts = [];
 
@@ -505,7 +1505,9 @@ async function collectStatsFromSingleFrame(frame) {
     }
 
     return summary;
-  });
+    },
+    RTC_HOOK_SOURCE
+  );
 }
 
 function mergeWebRtcSummaries(parts) {
@@ -578,7 +1580,7 @@ function mergeWebRtcSummaries(parts) {
 }
 
 async function collectWebRTCSummary(page) {
-  const frames = page.frames();
+  const frames = getFramesForPage(page);
   const parts = [];
   for (const frame of frames) {
     try {
@@ -607,31 +1609,39 @@ async function collectWebRTCSummaryFromBrowser(browser) {
   return mergeWebRtcSummaries(parts);
 }
 
-async function runVirtualUser(userId) {
+async function runVirtualUser(userId, opts = {}) {
+  const { signal, onBrowser, getControl } = opts;
+
   emit({
     type: "telemetry",
     event: "user_start",
-    userId,
-    ts: new Date().toISOString()
+    userId
   });
 
-  const browser = await puppeteer.launch({
-    headless: shouldOpenBrowser ? false : "new",
-    acceptInsecureCerts: ignoreHttpsErrors,
-    slowMo: Number.isFinite(slowMo) ? Math.max(slowMo, 0) : 0,
-    args: [
-      "--no-sandbox",
-      "--disable-extensions",
-      "--disable-extensions-file-access-check",
-      // Reduz iframes em processo separado (Jitsi + hook RTCPeerConnection).
-      "--disable-features=IsolateOrigins,site-per-process",
-      "--disable-site-isolation-trials",
-      ...(disableQuic ? ["--disable-quic"] : []),
-      "--autoplay-policy=no-user-gesture-required",
-      "--use-fake-ui-for-media-stream",
-      "--use-fake-device-for-media-stream"
-    ]
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: shouldOpenBrowser ? false : "new",
+      acceptInsecureCerts: ignoreHttpsErrors,
+      slowMo: Number.isFinite(slowMo) ? Math.max(slowMo, 0) : 0,
+      args: buildChromiumArgs()
+    });
+  } catch (err) {
+    emit({
+      type: "telemetry",
+      event: "browser_launch_failed",
+      userId,
+      message: err?.message || String(err)
+    });
+    return;
+  }
+
+  activeBrowsers.add(browser);
+  browser.on("disconnected", () => {
+    activeBrowsers.delete(browser);
   });
+  onBrowser?.(browser);
+  await applyChaosToAllBrowsers(readControlSync().chaos?.profile || "off");
 
   browser.on("targetcreated", (target) => {
     void (async () => {
@@ -651,6 +1661,11 @@ async function runVirtualUser(userId) {
 
   try {
     const page = await browser.newPage();
+    emit({
+      type: "telemetry",
+      event: "browser_ready",
+      userId
+    });
     await page.setViewport({ width: 1280, height: 720 });
     if (isJitsiHost(apiUrl) && page.setBypassCSP) {
       await page.setBypassCSP(true).catch(() => {});
@@ -665,8 +1680,7 @@ async function runVirtualUser(userId) {
         userId,
         method: request.method(),
         url: request.url().slice(0, 800),
-        resourceType: request.resourceType(),
-        ts: new Date().toISOString()
+        resourceType: request.resourceType()
       });
     });
 
@@ -676,8 +1690,7 @@ async function runVirtualUser(userId) {
         event: "response",
         userId,
         status: response.status(),
-        url: response.url().slice(0, 800),
-        ts: new Date().toISOString()
+        url: response.url().slice(0, 800)
       });
     });
 
@@ -687,8 +1700,7 @@ async function runVirtualUser(userId) {
         event: "request_failed",
         userId,
         url: request.url().slice(0, 800),
-        errorText: request.failure()?.errorText || "unknown",
-        ts: new Date().toISOString()
+        errorText: request.failure()?.errorText || "unknown"
       });
     });
 
@@ -699,39 +1711,6 @@ async function runVirtualUser(userId) {
       });
     }
 
-    const tick = Math.max(1000, statsIntervalMs);
-    let probeTicks = 0;
-    statsTimer = setInterval(async () => {
-      try {
-        if (isJitsiHost(apiUrl)) {
-          await injectRtcHookEverywhere(browser);
-        }
-        const summary = isJitsiHost(apiUrl)
-          ? await collectWebRTCSummaryFromBrowser(browser)
-          : await collectWebRTCSummary(page);
-        emit({
-          type: "telemetry",
-          event: "webrtc_stats",
-          userId,
-          ts: new Date().toISOString(),
-          summary: summary || emptyWebRtcSummary()
-        });
-        if (isJitsiHost(apiUrl) && probeTicks < 8 && (summary?.peerConnections || 0) === 0) {
-          probeTicks += 1;
-          const probe = await probeWebRtcBrowser(browser);
-          emit({
-            type: "telemetry",
-            event: "webrtc_probe",
-            userId,
-            ts: new Date().toISOString(),
-            probe
-          });
-        }
-      } catch {
-        /* page may be navigating */
-      }
-    }, tick);
-
     await page.goto(apiUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000
@@ -740,13 +1719,65 @@ async function runVirtualUser(userId) {
     await delay(isJitsiHost(apiUrl) ? 2500 : 1500);
 
     if (isJitsiHost(apiUrl)) {
-      const entered = await tryJitsiEnterConference(page);
+      if (jitsiDebugLoginUI) {
+        if (!shouldOpenBrowser) {
+          emit({
+            type: "telemetry",
+            event: "jitsi_debug_hint",
+            userId,
+            message:
+              "JITSI_DEBUG_LOGIN_UI: defina PUPPETEER_HEADFUL=1 no .env e reinicie o backend para abrir a janela do Chromium e ver a UI (Sign in / anfitrião)."
+          });
+        } else {
+          await page.bringToFront();
+        }
+        await tryRevealJitsiLoginUIFromPage(page, userId);
+        await delay(1500);
+        await tryRevealJitsiLoginUIFromPage(page, userId);
+        const pauseAfterReveal =
+          jitsiDebugPauseMsExplicit != null
+            ? jitsiDebugPauseMsExplicit
+            : shouldOpenBrowser
+              ? 90000
+              : 0;
+        if (pauseAfterReveal > 0) {
+          emit({
+            type: "telemetry",
+            event: "jitsi_debug_pause",
+            userId,
+            pauseMs: pauseAfterReveal,
+            message: `Pausa ${Math.round(
+              pauseAfterReveal / 1000
+            )}s — use a janela do browser para abrir Conta/Sign in/anfitrião. Ajuste JITSI_DEBUG_PAUSE_MS (0=sem pausa) ou deixe omisso (90s em headful).`
+          });
+          await delay(pauseAfterReveal);
+        }
+      }
+      const jitsiTab = (await pickJitsiPageForConference(browser, apiUrl)) || page;
+      await jitsiTab.bringToFront().catch(() => {});
+
+      if (jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword) {
+        try {
+          await tryJitsiInPagePasswordLogin(jitsiTab, userId);
+        } catch (e) {
+          emit({
+            type: "telemetry",
+            event: "jitsi_auth_result",
+            userId,
+            ok: false,
+            method: "in_page_form",
+            message: String(e?.message || e).slice(0, 200)
+          });
+        }
+        await delay(800);
+      }
+
+      const entered = await tryJitsiEnterConference(jitsiTab);
       emit({
         type: "telemetry",
         event: "jitsi_prejoin",
         userId,
-        clickedJoin: entered,
-        ts: new Date().toISOString()
+        clickedJoin: entered
       });
       if (!entered) {
         emit({
@@ -754,11 +1785,58 @@ async function runVirtualUser(userId) {
           event: "jitsi_hint",
           userId,
           message:
-            "Não foi possível clicar em Entrar automaticamente. Use PUPPETEER_HEADFUL=1 ou abra a sala no navegador e confira o nome do botão na pré-sala.",
-          ts: new Date().toISOString()
+            "Não foi possível clicar em Entrar automaticamente. Use PUPPETEER_HEADFUL=1 ou abra a sala no navegador e confira o nome do botão na pré-sala."
         });
       } else {
-        for (let wave = 0; wave < 5; wave++) {
+        emit({
+          type: "telemetry",
+          event: "jitsi_join_mode",
+          userId,
+          claimHost: jitsiClaimHost,
+          message: jitsiClaimHost
+            ? "A tentar reivindicar anfitrião (e login Google com JITSI_AUTH_*, se ativo)"
+            : "Sem reivindicar «Sou o anfitrião» (evita abrir o Google) — a procurar convidado / dispensar diálogo. Para anfitrião automático, use JITSI_CLAIM_HOST=1 e JITSI_AUTH_ENABLED=1 com credenciais"
+        });
+        let hostAnfitriaoClicado = false;
+        if (jitsiClaimHost) {
+          hostAnfitriaoClicado = await tryJitsiClickAfterJoinHostButton(jitsiTab, userId);
+        } else {
+          await tryJitsiGuestOrDismissHostDialog(jitsiTab, userId);
+        }
+        if (hostAnfitriaoClicado && (!jitsiAuthEnabled || !jitsiAuthEmail || !jitsiAuthPassword)) {
+          emit({
+            type: "telemetry",
+            event: "jitsi_hint",
+            userId,
+            message:
+              "Clicou em «Eu sou o anfitrião» — a seguir o Meet abre o Google. Enquanto o login Google não for concluído, a chamada WebRTC não começa (PeerConnections=0). Use PUPPETEER_HEADFUL=1 e termine o Google à mão, ou ative JITSI_AUTH_ENABLED=1 e credenciais. AUDIT_PAGE_DWELL_MS=45000 dá mais tempo após a sala carregar."
+          });
+        }
+        if (jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword && jitsiClaimHost) {
+          if (hostAnfitriaoClicado) {
+            await delay(jitsiPostHostAuthDelayMs);
+          }
+          try {
+            const authPage = (await pickJitsiPageForConference(browser, apiUrl)) || jitsiTab;
+            await authPage.bringToFront().catch(() => {});
+            await tryJitsiServiceLogin(authPage, browser, userId);
+          } catch (e) {
+            emit({
+              type: "telemetry",
+              event: "jitsi_auth_result",
+              userId,
+              ok: false,
+              method: "error",
+              message: String(e?.message || e).slice(0, 200)
+            });
+          }
+          await delay(Math.max(1500, jitsiPostHostAuthDelayMs));
+        } else if (hostAnfitriaoClicado) {
+          await delay(2000);
+        } else if (!jitsiClaimHost) {
+          await delay(2000);
+        }
+        for (let wave = 0; wave < 7; wave++) {
           await delay(2000);
           await injectRtcHookEverywhere(browser);
         }
@@ -767,51 +1845,280 @@ async function runVirtualUser(userId) {
           event: "jitsi_hint",
           userId,
           message:
-            "Se WebRTC no dashboard continuar zerado: use PUPPETEER_HEADFUL=1, entre com outro navegador na mesma sala e ignore net::ERR_FAILED em ficheiros .wasm/e2ee se o áudio/vídeo subir.",
-          ts: new Date().toISOString()
+            "Com PeerConnections=0: veja se o Meet entrou de facto na reunião (não deixou a aba de login). Aumente AUDIT_PAGE_DWELL_MS (Jitsi: 20000–45000). Pode juntar outro browser à mesma sala. net::ERR_FAILED em .wasm, blob ou chrome-extension://invalid costuma ser ruído se a UI do Meet tiver aberto."
         });
       }
     }
 
+    const tick = Math.max(1000, statsIntervalMs);
+    let probeTicks = 0;
+    /**
+     * Muitos VUs: todos em `setInterval` com o mesmo T criam pico (10× CDP + getStats
+     * ao mesmo tempo) e a telemetria devolve vazio — Jitsi continua. Espalha o 1.º
+     * tick por `userId` (ou `WEBRTC_STATS_STAGGER_MS` fixo).
+     */
+    const staggerEnv = process.env.WEBRTC_STATS_STAGGER_MS;
+    const customStagger =
+      staggerEnv !== undefined && String(staggerEnv).trim() !== ""
+        ? Math.max(0, Number.parseInt(String(staggerEnv), 10) || 0)
+        : null;
+    const defaultStagger = Math.min(
+      Math.max(tick - 1, 0),
+      (Math.abs(Number(userId)) % 32) * 150
+    );
+    const firstDelayMs = customStagger !== null ? customStagger : defaultStagger;
+    let webrtcStatsTickIndex = 0;
+    let statsTimerChain = { active: true };
+    const runWebrtcStatsTick = async () => {
+      if (!statsTimerChain.active) return;
+      webrtcStatsTickIndex += 1;
+      const doInject =
+        isJitsiHost(apiUrl) && webrtcStatsTickIndex % webrtcInjectEveryNTicks === 0;
+      let summary = emptyWebRtcSummary();
+      let statsNote = "";
+      try {
+        if (doInject) {
+          try {
+            await injectRtcHookEverywhere(browser);
+          } catch (e) {
+            statsNote += `inject ${String(e?.message || e).slice(0, 200)}; `;
+          }
+        }
+        try {
+          if (isJitsiHost(apiUrl)) {
+            summary = (await collectWebRTCSummaryFromBrowser(browser)) || emptyWebRtcSummary();
+          } else {
+            summary = (await collectWebRTCSummary(page)) || emptyWebRtcSummary();
+          }
+        } catch (e) {
+          statsNote += `collect ${String(e?.message || e).slice(0, 200)}; `;
+        }
+      } catch (e) {
+        statsNote += `tick ${String(e?.message || e).slice(0, 200)}; `;
+      }
+      emit({
+        type: "telemetry",
+        event: "webrtc_stats",
+        userId,
+        summary,
+        ...(statsNote.trim() ? { statsNote: statsNote.trim().slice(0, 500) } : {})
+      });
+      if (isJitsiHost(apiUrl) && probeTicks < 8 && (summary?.peerConnections || 0) === 0) {
+        probeTicks += 1;
+        try {
+          const probe = await probeWebRtcBrowser(browser);
+          emit({
+            type: "telemetry",
+            event: "webrtc_probe",
+            userId,
+            probe
+          });
+        } catch (e) {
+          emit({
+            type: "telemetry",
+            event: "webrtc_probe",
+            userId,
+            probe: {
+              error: true,
+              message: String(e?.message || e),
+              pageTargetCount: 0,
+              totalFrames: 0,
+              pages: []
+            }
+          });
+        }
+      }
+    };
+    let webrtcNextTimeout = null;
+    const scheduleWebrtcStats = (delayMs) => {
+      if (!statsTimerChain.active) return;
+      webrtcNextTimeout = setTimeout(() => {
+        if (!statsTimerChain.active) return;
+        webrtcNextTimeout = null;
+        void (async () => {
+          try {
+            await runWebrtcStatsTick();
+          } finally {
+            if (statsTimerChain.active) scheduleWebrtcStats(tick);
+          }
+        })();
+      }, delayMs);
+    };
+    /* Intercalado por userId + encadeado pós-tick (evita picos 10× CDP a cada T). */
+    scheduleWebrtcStats(firstDelayMs);
+    statsTimer = {
+      close: () => {
+        statsTimerChain.active = false;
+        if (webrtcNextTimeout != null) {
+          try {
+            clearTimeout(webrtcNextTimeout);
+          } catch {
+            /* */
+          }
+          webrtcNextTimeout = null;
+        }
+      }
+    };
+
     const jitsiMinDwell = 28000;
     const stay = Math.max(2000, isJitsiHost(apiUrl) ? Math.max(dwellMs, jitsiMinDwell) : dwellMs);
-    await delay(stay);
+    await dwellWithControls(stay, { signal, getControl });
 
     emit({
       type: "telemetry",
       event: "user_done",
+      userId
+    });
+  } catch (err) {
+    emit({
+      type: "telemetry",
+      event: "user_error",
       userId,
-      ts: new Date().toISOString()
+      message: err?.message || String(err)
     });
   } finally {
-    if (statsTimer) clearInterval(statsTimer);
-    await browser.close();
+    if (statsTimer && typeof statsTimer.close === "function") {
+      statsTimer.close();
+    } else if (statsTimer) {
+      clearInterval(statsTimer);
+    }
+    activeBrowsers.delete(browser);
+    await browser.close().catch(() => {});
   }
 }
 
 const batchSize = Math.min(4, Math.max(1, virtualUsers));
 
-emit({
-  type: "telemetry",
-  event: "test_start",
-  virtualUsers,
-  batchSize,
-  targetUrl: apiUrl,
-  ts: new Date().toISOString()
-});
-
-for (let start = 1; start <= virtualUsers; start += batchSize) {
-  const end = Math.min(start + batchSize - 1, virtualUsers);
-  const tasks = [];
-  for (let userId = start; userId <= end; userId++) {
-    tasks.push(runVirtualUser(userId));
+/** Lê control.json frequentemente para aplicar mudanças de chaos durante o teste (API /test/control). */
+let lastChaosProfileSeen = readControlSync().chaos?.profile || "off";
+const chaosPollMs = Number.parseInt(process.env.CHAOS_APPLY_INTERVAL_MS || "700", 10);
+const chaosTicker = setInterval(() => {
+  try {
+    const prof = readControlSync().chaos?.profile || "off";
+    if (prof !== lastChaosProfileSeen) {
+      lastChaosProfileSeen = prof;
+      emit({
+        type: "telemetry",
+        event: "chaos_profile_changed",
+        profile: prof
+      });
+    }
+    void applyChaosToAllBrowsers(prof);
+  } catch {
+    /* */
   }
-  await Promise.all(tasks);
+}, Math.max(250, chaosPollMs));
+
+let poolShuttingDown = false;
+function requestPoolShutdown() {
+  poolShuttingDown = true;
+}
+process.on("SIGTERM", requestPoolShutdown);
+process.on("SIGINT", requestPoolShutdown);
+
+async function runPoolSupervisor() {
+  const inflight = new Map();
+  let nextId = 0;
+  let lastPoolStateEmit = 0;
+  const spawnGap = Math.max(0, Number.isFinite(poolSpawnGapMs) ? poolSpawnGapMs : 600);
+
+  while (true) {
+    if (poolShuttingDown) {
+      for (const [, w] of inflight) {
+        w.ac.abort();
+        await w.browser?.close().catch(() => {});
+      }
+      inflight.clear();
+      break;
+    }
+
+    const ctrl = readControlSync();
+    const want = ctrl.targetVirtualUsers;
+    const now = Date.now();
+    if (poolStateDebugMs > 0 && now - lastPoolStateEmit >= poolStateDebugMs) {
+      lastPoolStateEmit = now;
+      emit({
+        type: "telemetry",
+        event: "pool_state",
+        want,
+        inflight: inflight.size
+      });
+    }
+
+    const ids = [...inflight.keys()].sort((a, b) => b - a);
+    while (inflight.size > want && ids.length) {
+      const id = ids.shift();
+      const w = id !== undefined ? inflight.get(id) : null;
+      if (!w) continue;
+      w.ac.abort();
+      await w.browser?.close().catch(() => {});
+      inflight.delete(id);
+    }
+
+    while (inflight.size < want && !poolShuttingDown) {
+      nextId += 1;
+      const id = nextId;
+      const ac = new AbortController();
+      const entry = { ac, browser: null };
+      inflight.set(id, entry);
+      void runVirtualUser(id, {
+        signal: ac.signal,
+        getControl: readControlSync,
+        onBrowser: (b) => {
+          entry.browser = b;
+        }
+      })
+        .catch((err) => {
+          console.error("runVirtualUser", id, err);
+          emit({
+            type: "telemetry",
+            event: "user_worker_unhandled",
+            userId: id,
+            message: err?.message || String(err)
+          });
+        })
+        .finally(() => {
+          inflight.delete(id);
+        });
+      await delay(spawnGap);
+    }
+
+    await delay(500);
+  }
 }
 
-emit({
-  type: "telemetry",
-  event: "test_complete",
-  virtualUsers,
-  ts: new Date().toISOString()
-});
+async function main() {
+  emit({
+    type: "telemetry",
+    event: "test_start",
+    ...(sessionIdEnv ? { sessionId: sessionIdEnv } : {}),
+    startedAtISO: new Date(testStartedAtMs).toISOString(),
+    virtualUsers,
+    batchSize,
+    poolMode: streamSentryPool,
+    targetUrl: apiUrl
+  });
+
+  if (streamSentryPool) {
+    await runPoolSupervisor();
+  } else {
+    for (let start = 1; start <= virtualUsers; start += batchSize) {
+      const end = Math.min(start + batchSize - 1, virtualUsers);
+      const tasks = [];
+      for (let userId = start; userId <= end; userId++) {
+        tasks.push(runVirtualUser(userId, { getControl: readControlSync }));
+      }
+      await Promise.all(tasks);
+    }
+  }
+
+  emit({
+    type: "telemetry",
+    event: "test_complete",
+    virtualUsers,
+    poolMode: streamSentryPool
+  });
+  clearInterval(chaosTicker);
+}
+
+await main();

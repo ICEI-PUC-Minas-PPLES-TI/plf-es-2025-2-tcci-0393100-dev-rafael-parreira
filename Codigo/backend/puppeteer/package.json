@@ -7,6 +7,7 @@
     "smoke": "node smoke.mjs"
   },
   "dependencies": {
+    "ghost-cursor": "^1.4.2",
     "puppeteer": "^24.7.1"
   }
 }

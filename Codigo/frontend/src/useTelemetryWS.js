@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+/** @typedef {{ onTestRunFinished?: () => void; onSessionInvalid?: () => void }} TelemetryWSOptions */
+
 function buildWsUrl(apiBaseUrl, token) {
   const base = apiBaseUrl.replace(/^http/, "ws").replace(/\/$/, "");
   return `${base}/ws/telemetry?token=${encodeURIComponent(token)}`;
@@ -11,8 +13,77 @@ function avg(nums) {
   return n.reduce((a, b) => a + b, 0) / n.length;
 }
 
+/**
+ * Sinal de WebRTC além de peerConnections (útil quando o hook no Chromium não
+ * contou PCs mas getStats ainda traz tráfego).
+ */
+export function summaryHasWebrtcActivity(s) {
+  if (!s) return false;
+  if ((s.peerConnections || 0) > 0) return true;
+  const iv = s.inboundVideo;
+  const ia = s.inboundAudio;
+  const ov = s.outboundVideo;
+  const oa = s.outboundAudio;
+  if ((iv?.packetsReceived || 0) > 0 || (iv?.bytesReceived || 0) > 0 || (iv?.framesDecoded || 0) > 0) return true;
+  if ((ia?.packetsReceived || 0) > 0 || (ia?.bytesReceived || 0) > 0) return true;
+  if ((ov?.bytesSent || 0) > 0 || (ov?.framesEncoded || 0) > 0) return true;
+  if ((oa?.packetsSent || 0) > 0) return true;
+  if (s.candidatePair?.currentRoundTripTimeMs != null && Number.isFinite(s.candidatePair.currentRoundTripTimeMs))
+    return true;
+  if ((s.transport?.bytesReceived || 0) > 0 || (s.transport?.bytesSent || 0) > 0) return true;
+  if (
+    s.remoteInbound?.videoRoundTripTimeMs != null ||
+    s.remoteInbound?.audioRoundTripTimeMs != null
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function totalRtcpBytesIn(s) {
+  if (!s) return 0;
+  return (s.inboundVideo?.bytesReceived || 0) + (s.inboundAudio?.bytesReceived || 0);
+}
+
+/**
+ * Não deixar um getStats "morno" (sem tráfego ainda) substituir a última leitura
+ * com métricas na tabela por utilizador.
+ */
+function pickWebrtcSummaryForDisplay(prev, next) {
+  if (!next) return prev;
+  if (!prev) return next;
+  if (summaryHasWebrtcActivity(next)) return next;
+  if (summaryHasWebrtcActivity(prev)) return prev;
+  return next;
+}
+
+function rttFromSummary(s) {
+  return (
+    s.candidatePair?.currentRoundTripTimeMs ??
+    s.remoteInbound?.videoRoundTripTimeMs ??
+    s.remoteInbound?.audioRoundTripTimeMs
+  );
+}
+
+/** Média entre utilizadores com atividade — gráficos refletem o teste, não só o último evento. */
+function seriesAveragesFromLastByUser(map) {
+  const rows = Object.values(map).filter((s) => s && summaryHasWebrtcActivity(s));
+  if (!rows.length) return { rtt: null, jitterVideoMs: null, fps: null };
+  const rtts = rows.map((r) => rttFromSummary(r)).filter((x) => x != null && Number.isFinite(x));
+  const jvs = rows
+    .map((r) => r.inboundVideo?.jitter)
+    .filter((x) => x != null && Number.isFinite(x))
+    .map((j) => j * 1000);
+  const fss = rows.map((r) => r.inboundVideo?.framesPerSecond).filter((x) => x != null && Number.isFinite(x));
+  return {
+    rtt: rtts.length ? avg(rtts) : null,
+    jitterVideoMs: jvs.length ? avg(jvs) : null,
+    fps: fss.length ? avg(fss) : null
+  };
+}
+
 function aggregateWebRTC(lastByUser) {
-  const rows = Object.values(lastByUser).filter((s) => s && s.peerConnections > 0);
+  const rows = Object.values(lastByUser).filter((s) => s && summaryHasWebrtcActivity(s));
   if (!rows.length) {
     return {
       usersWithRtc: 0,
@@ -88,7 +159,12 @@ function aggregateWebRTC(lastByUser) {
   };
 }
 
-export function useTelemetryWS(apiBaseUrl, token, enabled) {
+export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
+  const onTestRunFinishedRef = useRef(options?.onTestRunFinished);
+  onTestRunFinishedRef.current = options?.onTestRunFinished;
+  const onSessionInvalidRef = useRef(options?.onSessionInvalid);
+  onSessionInvalidRef.current = options?.onSessionInvalid;
+
   const [connected, setConnected] = useState(false);
   const [requestTotal, setRequestTotal] = useState(0);
   const [responseTotal, setResponseTotal] = useState(0);
@@ -100,8 +176,10 @@ export function useTelemetryWS(apiBaseUrl, token, enabled) {
   const [lastEvent, setLastEvent] = useState("");
   const secondBucketRef = useRef({ second: 0, count: 0 });
   const rpsHistoryRef = useRef([]);
+  const rpsHistoryTimeRef = useRef([]);
   const lastByUserRef = useRef({});
-  const webrtcPrevRef = useRef({ ts: 0, bytesIn: 0 });
+  /** Soma de bytes (todos os VU) + timestamp — taxa recebida coerente com vários browser. */
+  const webrtcBytesTotalRef = useRef({ ts: 0, sumBytes: 0 });
 
   const [webrtcAggregate, setWebrtcAggregate] = useState(() => aggregateWebRTC({}));
   const [webrtcSeries, setWebrtcSeries] = useState({
@@ -111,6 +189,30 @@ export function useTelemetryWS(apiBaseUrl, token, enabled) {
     fpsIn: []
   });
   const [webrtcLastByUser, setWebrtcLastByUser] = useState({});
+  const [testElapsedSec, setTestElapsedSec] = useState(null);
+  const [elapsedSeries, setElapsedSeries] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState("");
+  const [seriesTimeMs, setSeriesTimeMs] = useState({
+    cumulative: [],
+    rps: [],
+    elapsed: [],
+    webrtc: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] }
+  });
+  const [testWallStartMs, setTestWallStartMs] = useState(null);
+
+  const totalsRef = useRef({ req: 0, res: 0, fail: 0 });
+  const cumulativeListRef = useRef([]);
+  const cumulativeTimeMsRef = useRef([]);
+  const statusMapRef = useRef({});
+  const feedListRef = useRef([]);
+  const lastEventRef = useRef("");
+  const sessionIdRef = useRef("");
+  const elapsedValueRef = useRef(null);
+  const elapsedListRef = useRef([]);
+  const elapsedTimeMsRef = useRef([]);
+  const lastElapsedUiAtRef = useRef(0);
+  const webrtcSeriesRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
+  const webrtcTimeMsRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
 
   useEffect(() => {
     if (!enabled || !token) {
@@ -118,10 +220,43 @@ export function useTelemetryWS(apiBaseUrl, token, enabled) {
       return undefined;
     }
 
-    const url = buildWsUrl(apiBaseUrl, token);
-    const ws = new WebSocket(url);
+    const ac = new AbortController();
+    let ws;
+    /** ~5 updates/s UI; carga pesada (séries, acumulado) fica no flush, não no onmessage. */
+    const FLUSH_MS = 200;
+    const ELAPSED_UI_MIN_MS = 500;
+    const REQUEST_FEED_MIN_MS = 100;
+    const CUMULATIVE_MAX = 100;
+
+    const webrtcDirtyRef = { current: false };
+    const lastRequestFeedAtRef = { current: 0 };
+    const lastWebrtcStatsNoteAtRef = { current: 0 };
+    /** Duração suave: relógio local + resync a partir de `elapsedSec` do runner. */
+    const clientElapsedRef = { current: { active: false, wallMs: 0, baseSec: 0 } };
 
     const resetMetrics = () => {
+      clientElapsedRef.current = { active: false, wallMs: 0, baseSec: 0 };
+      webrtcDirtyRef.current = false;
+      lastRequestFeedAtRef.current = 0;
+      lastWebrtcStatsNoteAtRef.current = 0;
+      totalsRef.current = { req: 0, res: 0, fail: 0 };
+      cumulativeListRef.current = [];
+      statusMapRef.current = {};
+      feedListRef.current = [];
+      lastEventRef.current = "";
+      sessionIdRef.current = "";
+      elapsedValueRef.current = null;
+      elapsedListRef.current = [];
+      elapsedTimeMsRef.current = [];
+      lastElapsedUiAtRef.current = 0;
+      secondBucketRef.current = { second: 0, count: 0 };
+      rpsHistoryRef.current = [];
+      rpsHistoryTimeRef.current = [];
+      lastByUserRef.current = {};
+      webrtcBytesTotalRef.current = { ts: 0, sumBytes: 0 };
+      webrtcSeriesRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+      webrtcTimeMsRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+      cumulativeTimeMsRef.current = [];
       setRequestTotal(0);
       setResponseTotal(0);
       setFailTotal(0);
@@ -130,170 +265,454 @@ export function useTelemetryWS(apiBaseUrl, token, enabled) {
       setStatusCounts({});
       setFeed([]);
       setLastEvent("");
-      secondBucketRef.current = { second: 0, count: 0 };
-      rpsHistoryRef.current = [];
-      lastByUserRef.current = {};
-      webrtcPrevRef.current = { ts: 0, bytesIn: 0 };
       setWebrtcAggregate(aggregateWebRTC({}));
       setWebrtcSeries({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
       setWebrtcLastByUser({});
+      setTestElapsedSec(null);
+      setElapsedSeries([]);
+      setActiveSessionId("");
+      setSeriesTimeMs({
+        cumulative: [],
+        rps: [],
+        elapsed: [],
+        webrtc: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] }
+      });
+      setTestWallStartMs(null);
     };
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
+    const appendCumulativeSample = () => {
+      if (!sessionIdRef.current) return;
+      const c = cumulativeListRef.current;
+      const t = totalsRef.current.req;
+      const ms = Date.now();
+      c.push(t);
+      cumulativeTimeMsRef.current.push(ms);
+      if (c.length > CUMULATIVE_MAX) {
+        c.shift();
+        cumulativeTimeMsRef.current.shift();
+      }
+    };
 
-    ws.onmessage = (event) => {
-      let data;
-      try {
-        data = JSON.parse(event.data);
-      } catch {
+    const flushWebrtcSeriesFromRef = () => {
+      if (!webrtcDirtyRef.current) return;
+      webrtcDirtyRef.current = false;
+      const m = lastByUserRef.current;
+      let sumB = 0;
+      for (const s of Object.values(m)) {
+        if (s) sumB += totalRtcpBytesIn(s);
+      }
+      const now = Date.now();
+      const prevB = webrtcBytesTotalRef.current;
+      let downKbps = 0;
+      if (prevB.ts && now > prevB.ts && sumB >= prevB.sumBytes) {
+        const dt = (now - prevB.ts) / 1000;
+        downKbps = ((sumB - prevB.sumBytes) * 8) / 1000 / Math.max(dt, 0.001);
+      }
+      webrtcBytesTotalRef.current = { ts: now, sumBytes: sumB };
+      const hasRtcSample = Object.values(m).some((s) => s && summaryHasWebrtcActivity(s));
+      /** Sem tráfego RTP/PCs, não empilhar zeros — senão os gráficos parecem “válidos” e confundem com HTTP. */
+      const meaningfulDownlink = downKbps > 0.75;
+      if (!hasRtcSample && !meaningfulDownlink) {
         return;
       }
-      if (data.type !== "telemetry") {
-        return;
-      }
+      const sa = seriesAveragesFromLastByUser(m);
+      const rtt = sa.rtt;
+      const jv = sa.jitterVideoMs;
+      const fps = sa.fps;
+      const cap = 60;
+      const nowMs = Date.now();
+      const push = (arr, v) => {
+        const x = v != null && Number.isFinite(v) ? v : 0;
+        return [...arr, x].slice(-cap);
+      };
+      const pushT = (tarr) => [...tarr, nowMs].slice(-cap);
+      const ws = webrtcSeriesRef.current;
+      const wst = webrtcTimeMsRef.current;
+      ws.rttMs = push(ws.rttMs, rtt != null && Number.isFinite(rtt) ? rtt : 0);
+      wst.rttMs = pushT(wst.rttMs);
+      ws.jitterVideo = push(ws.jitterVideo, jv != null && Number.isFinite(jv) ? jv : 0);
+      wst.jitterVideo = pushT(wst.jitterVideo);
+      ws.downlinkKbps = push(ws.downlinkKbps, downKbps);
+      wst.downlinkKbps = pushT(wst.downlinkKbps);
+      ws.fpsIn = push(ws.fpsIn, fps != null && Number.isFinite(fps) ? fps : 0);
+      wst.fpsIn = pushT(wst.fpsIn);
+    };
 
-      setLastEvent(data.event || "");
+    const flushThrottled = () => {
+      appendCumulativeSample();
+      flushWebrtcSeriesFromRef();
 
-      if (data.event === "test_start") {
-        resetMetrics();
-        setLastEvent("test_start");
-        return;
-      }
-
-      if (data.event === "request") {
-        setRequestTotal((c) => c + 1);
-        setCumulativeSeries((s) => {
-          const next = [...s, s.length ? s[s.length - 1] + 1 : 1];
-          return next.slice(-80);
-        });
-        const nowSec = Math.floor(Date.now() / 1000);
-        const bucket = secondBucketRef.current;
-        if (bucket.second !== nowSec) {
-          rpsHistoryRef.current.push(bucket.count);
-          rpsHistoryRef.current = rpsHistoryRef.current.slice(-40);
-          bucket.second = nowSec;
-          bucket.count = 1;
-        } else {
-          bucket.count += 1;
+      setRequestTotal(totalsRef.current.req);
+      setResponseTotal(totalsRef.current.res);
+      setFailTotal(totalsRef.current.fail);
+      setCumulativeSeries(cumulativeListRef.current.slice());
+      const b = secondBucketRef.current;
+      setRpsSeries([...rpsHistoryRef.current, b.count].slice(-80));
+      setStatusCounts({ ...statusMapRef.current });
+      setFeed([...feedListRef.current].slice(0, 40));
+      setLastEvent(lastEventRef.current);
+      if (sessionIdRef.current) setActiveSessionId(sessionIdRef.current);
+      if (elapsedListRef.current.length) setElapsedSeries(elapsedListRef.current.slice());
+      setWebrtcLastByUser({ ...lastByUserRef.current });
+      setWebrtcAggregate(aggregateWebRTC(lastByUserRef.current));
+      const s = webrtcSeriesRef.current;
+      const wtm = webrtcTimeMsRef.current;
+      setWebrtcSeries({
+        rttMs: s.rttMs.slice(),
+        jitterVideo: s.jitterVideo.slice(),
+        downlinkKbps: s.downlinkKbps.slice(),
+        fpsIn: s.fpsIn.slice()
+      });
+      const rpsAll = [...rpsHistoryRef.current, b.count];
+      const tAll = [...rpsHistoryTimeRef.current, Date.now()];
+      const rpsStart = Math.max(0, rpsAll.length - 80);
+      const rpsV = rpsAll.slice(rpsStart);
+      const rpsT = tAll.slice(rpsStart);
+      setSeriesTimeMs({
+        cumulative: [...cumulativeTimeMsRef.current],
+        rps: rpsT,
+        elapsed: [...elapsedTimeMsRef.current],
+        webrtc: {
+          rttMs: wtm.rttMs.slice(),
+          jitterVideo: wtm.jitterVideo.slice(),
+          downlinkKbps: wtm.downlinkKbps.slice(),
+          fpsIn: wtm.fpsIn.slice()
         }
-        setRpsSeries([...rpsHistoryRef.current, bucket.count]);
-        setFeed((f) =>
-          [{ kind: "req", text: `${data.method} ${(data.url || "").slice(0, 72)}`, ts: data.ts }, ...f].slice(0, 40)
-        );
-      }
+      });
+    };
 
-      if (data.event === "response") {
-        setResponseTotal((c) => c + 1);
-        const st = String(data.status ?? "?");
-        setStatusCounts((m) => ({ ...m, [st]: (m[st] || 0) + 1 }));
+    let flushIv = null;
+    const elapsedDurationIv = setInterval(() => {
+      if (clientElapsedRef.current.active) {
+        const { wallMs, baseSec } = clientElapsedRef.current;
+        setTestElapsedSec(baseSec + (Date.now() - wallMs) / 1000);
       }
+    }, 300);
 
-      if (data.event === "request_failed") {
-        setFailTotal((c) => c + 1);
-        setFeed((f) =>
-          [{ kind: "fail", text: data.errorText || "fail", ts: data.ts }, ...f].slice(0, 40)
-        );
+    function stopFlushInterval() {
+      if (flushIv != null) {
+        clearInterval(flushIv);
+        flushIv = null;
       }
+    }
 
-      if (data.event === "jitsi_prejoin") {
-        setFeed((f) =>
-          [
-            {
-              kind: "info",
-              text: `Jitsi pré-sala: botão de entrar ${data.clickedJoin ? "acionado" : "não encontrado (use headful ou aumente tempo)"}`,
-              ts: data.ts
-            },
-            ...f
-          ].slice(0, 40)
-        );
-      }
+    const prependFeed = (item) => {
+      feedListRef.current = [item, ...feedListRef.current].slice(0, 40);
+    };
 
-      if (data.event === "jitsi_hint" && data.message) {
-        setFeed((f) => [{ kind: "info", text: data.message, ts: data.ts }, ...f].slice(0, 40));
-      }
+    function wireWebSocket(socket) {
+      socket.onopen = () => {
+        setConnected(true);
+        stopFlushInterval();
+        flushIv = setInterval(flushThrottled, FLUSH_MS);
+        flushThrottled();
+      };
+      socket.onclose = () => {
+        stopFlushInterval();
+        flushThrottled();
+        setConnected(false);
+      };
+      socket.onerror = () => setConnected(false);
 
-      if (data.event === "webrtc_probe" && data.probe) {
-        const p = data.probe;
-        let sumTracked = 0;
-        let sumActive = 0;
-        let wrappedFrames = 0;
-        let protoFrames = 0;
-        const frameRows = [];
-        if (Array.isArray(p.pages)) {
-          for (const pg of p.pages) {
-            frameRows.push(...(pg.frames || []));
+      socket.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (data.type !== "telemetry") {
+          return;
+        }
+
+        lastEventRef.current = data.event || "";
+
+        if (data.event === "test_start") {
+          resetMetrics();
+          const wall = Date.now();
+          setTestWallStartMs(wall);
+          if (data.sessionId) sessionIdRef.current = String(data.sessionId);
+          if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
+            const es = Number(data.elapsedSec);
+            elapsedValueRef.current = es;
+            elapsedListRef.current = [es];
+            elapsedTimeMsRef.current = [wall];
+            lastElapsedUiAtRef.current = Date.now();
+            clientElapsedRef.current = {
+              active: true,
+              wallMs: Date.now(),
+              baseSec: es
+            };
+            setTestElapsedSec(es);
+          } else {
+            clientElapsedRef.current = { active: true, wallMs: Date.now(), baseSec: 0 };
+            elapsedListRef.current = [0];
+            elapsedTimeMsRef.current = [wall];
+            setTestElapsedSec(0);
           }
-        } else {
-          frameRows.push(...(p.frames || []));
+          lastEventRef.current = "test_start";
+          flushThrottled();
+          return;
         }
-        for (const row of frameRows) {
-          if (row && row.tracked >= 0) sumTracked += row.tracked;
-          sumActive += row.active || 0;
-          if (row.wrapped) wrappedFrames += 1;
-          if (row.protoTracked) protoFrames += 1;
+
+        if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
+          const es = Number(data.elapsedSec);
+          elapsedValueRef.current = es;
+          if (clientElapsedRef.current.active) {
+            clientElapsedRef.current = { active: true, wallMs: Date.now(), baseSec: es };
+          }
+          const t = Date.now();
+          if (t - lastElapsedUiAtRef.current >= ELAPSED_UI_MIN_MS) {
+            lastElapsedUiAtRef.current = t;
+            elapsedListRef.current = [...elapsedListRef.current, es].slice(-80);
+            elapsedTimeMsRef.current = [...elapsedTimeMsRef.current, t].slice(-80);
+          }
         }
-        const targets =
-          p.pageTargetCount != null ? `${p.pageTargetCount} target(s) page` : "1 página";
-        const frames =
-          p.totalFrames != null ? p.totalFrames : p.frameCount != null ? p.frameCount : frameRows.length;
-        setFeed((f) =>
-          [
-            {
+        if (data.sessionId && typeof data.sessionId === "string") {
+          sessionIdRef.current = data.sessionId;
+        }
+
+        if (data.event === "test_stopped") {
+          clientElapsedRef.current = { ...clientElapsedRef.current, active: false };
+          prependFeed({
+            kind: "info",
+            text: data.message || "Teste interrompido.",
+            ts: data.ts
+          });
+          onTestRunFinishedRef.current?.();
+          flushThrottled();
+          return;
+        }
+
+        if (data.event === "test_complete" || data.event === "server_audit_summary") {
+          clientElapsedRef.current = { ...clientElapsedRef.current, active: false };
+          onTestRunFinishedRef.current?.();
+        }
+
+        if (data.event === "request") {
+          const t = totalsRef.current;
+          t.req += 1;
+          const nowSec = Math.floor(Date.now() / 1000);
+          const bucket = secondBucketRef.current;
+          if (bucket.second !== nowSec) {
+            rpsHistoryRef.current.push(bucket.count);
+            rpsHistoryTimeRef.current.push(Date.now());
+            rpsHistoryRef.current = rpsHistoryRef.current.slice(-40);
+            rpsHistoryTimeRef.current = rpsHistoryTimeRef.current.slice(-40);
+            bucket.second = nowSec;
+            bucket.count = 1;
+          } else {
+            bucket.count += 1;
+          }
+          const tFeed = Date.now();
+          if (tFeed - lastRequestFeedAtRef.current >= REQUEST_FEED_MIN_MS) {
+            lastRequestFeedAtRef.current = tFeed;
+            prependFeed({ kind: "req", text: `${data.method} ${(data.url || "").slice(0, 72)}`, ts: data.ts });
+          }
+        }
+
+        if (data.event === "response") {
+          totalsRef.current.res += 1;
+          const st = String(data.status ?? "?");
+          const m = statusMapRef.current;
+          m[st] = (m[st] || 0) + 1;
+        }
+
+        if (data.event === "request_failed") {
+          totalsRef.current.fail += 1;
+          prependFeed({ kind: "fail", text: data.errorText || "fail", ts: data.ts });
+        }
+
+        if (data.event === "chaos_profile_changed" && data.profile != null) {
+          prependFeed({
+            kind: "info",
+            text: `Chaos de rede: perfil «${data.profile}» (aplicado nos Chromium)`,
+            ts: data.ts
+          });
+        }
+
+        if (data.event === "jitsi_debug_hint" && data.message) {
+          prependFeed({ kind: "info", text: String(data.message), ts: data.ts });
+        }
+        if (data.event === "jitsi_debug_pause" && data.message) {
+          prependFeed({ kind: "info", text: `Pausa depuração Jitsi: ${String(data.message).slice(0, 200)}`, ts: data.ts });
+        }
+        if (data.event === "jitsi_login_ui_reveal" && data.result != null) {
+          const r = data.result;
+          const detail = r.clicks?.length ? `cliques: ${r.clicks.join(", ")}` : r.note || r.error || JSON.stringify(r).slice(0, 120);
+          prependFeed({
+            kind: "info",
+            text: `Jitsi reveal UI: ${r.ok ? "ok" : "sem match"} — ${detail}`,
+            ts: data.ts
+          });
+        }
+        if (data.event === "jitsi_join_mode" && data.message) {
+          prependFeed({
+            kind: "info",
+            text: `Jitsi: ${data.claimHost ? "reivindicar anfitrião" : "não tocar anfitrião (convidado)"} — ${String(data.message).slice(0, 280)}`,
+            ts: data.ts
+          });
+        }
+        if (data.event === "jitsi_guest_path") {
+          if (data.ok) {
+            const bits = [data.method, data.label && String(data.label).slice(0, 80), data.attempt && `tent. ${data.attempt}`]
+              .filter(Boolean)
+              .join(" · ");
+            prependFeed({ kind: "info", text: `Jitsi: caminho convidado/dispensar — ${bits}`, ts: data.ts });
+          } else {
+            prependFeed({ kind: "info", text: String(data.message || "convidado: sem match no diálogo").slice(0, 240), ts: data.ts });
+          }
+        }
+        if (data.event === "jitsi_host_button") {
+          if (data.skipped) {
+            prependFeed({ kind: "info", text: String(data.message || "Espera pelo botão anfitrião desligada"), ts: data.ts });
+          } else if (data.ok) {
+            const bits = [data.method || "click", data.label && String(data.label).slice(0, 80), data.attempt && `tent. ${data.attempt}`]
+              .filter(Boolean)
+              .join(" · ");
+            prependFeed({ kind: "info", text: `Jitsi: botão anfitrião / «I am the host» — ${bits}`, ts: data.ts });
+          } else {
+            prependFeed({ kind: "fail", text: `Jitsi anfitrião: ${String(data.message || "não encontrado").slice(0, 220)}`, ts: data.ts });
+          }
+        }
+        if (data.event === "jitsi_auth_attempt") {
+          const phase = data.phase === "google" ? "Google (pós-join) " : data.phase === "in_page" ? "form. na página " : "";
+          prependFeed({
+            kind: "info",
+            text: `Jitsi: a tentar login — ${phase}JITSI_AUTH_* (env)…`,
+            ts: data.ts
+          });
+        }
+        if (data.event === "jitsi_auth_result") {
+          const ok = Boolean(data.ok);
+          prependFeed({
+            kind: ok ? "info" : "fail",
+            text: `Jitsi login: ${ok ? "ok" : "falhou"}${data.method ? ` (${data.method})` : ""}${data.message ? ` — ${String(data.message).slice(0, 160)}` : ""}`,
+            ts: data.ts
+          });
+        }
+        if (data.event === "jitsi_prejoin") {
+          prependFeed({
+            kind: "info",
+            text: `Jitsi pré-sala: botão de entrar ${data.clickedJoin ? "acionado" : "não encontrado (use headful ou aumente tempo)"}`,
+            ts: data.ts
+          });
+        }
+
+        if (data.event === "jitsi_hint" && data.message) {
+          prependFeed({ kind: "info", text: data.message, ts: data.ts });
+        }
+
+        /**
+         * No modo *pool* o runner incrementa `userId` a cada browser (1,2,3,…). Os workers
+         * que já terminam emitem `user_done` — se não retirarmos do mapa, o dashboard
+         * acumula dezenas de “utilizadores” com a última amostra WebRTC, embora só N
+         * concorrentes existam (ex.: 5 no Jitsi).
+         */
+        if ((data.event === "user_done" || data.event === "user_error") && data.userId != null) {
+          const uid = String(data.userId);
+          if (Object.prototype.hasOwnProperty.call(lastByUserRef.current, uid)) {
+            delete lastByUserRef.current[uid];
+            webrtcDirtyRef.current = true;
+          }
+        }
+
+        if (data.event === "webrtc_probe" && data.probe) {
+          const p = data.probe;
+          if (p.error) {
+            prependFeed({
               kind: "info",
-              text: `WebRTC probe (user ${data.userId ?? "?"}): ${targets}, ${frames} frame(s) no total, construtor wrap em ${wrappedFrames} frame(s), patch prototype em ${protoFrames}, PCs rastreados=${sumTracked}, ativos=${sumActive}`,
+              text: `WebRTC probe falhou (user ${data.userId ?? "?"}): ${p.message || "erro"}`,
               ts: data.ts
-            },
-            ...f
-          ].slice(0, 40)
-        );
-      }
-
-      if (data.event === "webrtc_stats" && data.summary) {
-        const uid = data.userId;
-        lastByUserRef.current[uid] = data.summary;
-        const agg = aggregateWebRTC(lastByUserRef.current);
-        setWebrtcAggregate(agg);
-        setWebrtcLastByUser({ ...lastByUserRef.current });
-
-        const s = data.summary;
-        const now = Date.now();
-        const bytesIn =
-          (s.inboundVideo?.bytesReceived || 0) + (s.inboundAudio?.bytesReceived || 0);
-        const prev = webrtcPrevRef.current;
-        let downKbps = 0;
-        if (prev.ts && now > prev.ts && bytesIn >= prev.bytesIn) {
-          const dt = (now - prev.ts) / 1000;
-          downKbps = ((bytesIn - prev.bytesIn) * 8) / 1000 / Math.max(dt, 0.001);
+            });
+          } else {
+          let sumTracked = 0;
+          let sumActive = 0;
+          let wrappedFrames = 0;
+          let protoFrames = 0;
+          const frameRows = [];
+          if (Array.isArray(p.pages)) {
+            for (const pg of p.pages) {
+              frameRows.push(...(pg.frames || []));
+            }
+          } else {
+            frameRows.push(...(p.frames || []));
+          }
+          for (const row of frameRows) {
+            if (row && row.tracked >= 0) sumTracked += row.tracked;
+            sumActive += row.active || 0;
+            if (row.wrapped) wrappedFrames += 1;
+            if (row.protoTracked) protoFrames += 1;
+          }
+          const targets = p.pageTargetCount != null ? `${p.pageTargetCount} target(s) page` : "1 página";
+          const frames =
+            p.totalFrames != null ? p.totalFrames : p.frameCount != null ? p.frameCount : frameRows.length;
+          prependFeed({
+            kind: "info",
+            text: `WebRTC probe (user ${data.userId ?? "?"}): ${targets}, ${frames} frame(s) no total, construtor wrap em ${wrappedFrames} frame(s), patch prototype em ${protoFrames}, PCs rastreados=${sumTracked}, ativos=${sumActive}`,
+            ts: data.ts
+          });
+          }
         }
-        webrtcPrevRef.current = { ts: now, bytesIn };
 
-        const rtt =
-          s.candidatePair?.currentRoundTripTimeMs ??
-          s.remoteInbound?.videoRoundTripTimeMs ??
-          s.remoteInbound?.audioRoundTripTimeMs;
-        const jv = s.inboundVideo?.jitter != null ? s.inboundVideo.jitter * 1000 : null;
-        const fps = s.inboundVideo?.framesPerSecond;
+        if (data.event === "webrtc_stats" && data.statsNote) {
+          const t = Date.now();
+          if (t - lastWebrtcStatsNoteAtRef.current > 15000) {
+            lastWebrtcStatsNoteAtRef.current = t;
+            prependFeed({
+              kind: "info",
+              text: `WebRTC aviso: ${String(data.statsNote).slice(0, 180)}`,
+              ts: data.ts
+            });
+          }
+        }
 
-        setWebrtcSeries((prevSeries) => {
-          const cap = 60;
-          const push = (arr, v) => {
-            const x = v != null && Number.isFinite(v) ? v : 0;
-            return [...arr, x].slice(-cap);
-          };
-          return {
-            rttMs: push(prevSeries.rttMs, rtt != null && Number.isFinite(rtt) ? rtt : 0),
-            jitterVideo: push(prevSeries.jitterVideo, jv != null && Number.isFinite(jv) ? jv : 0),
-            downlinkKbps: push(prevSeries.downlinkKbps, downKbps),
-            fpsIn: push(prevSeries.fpsIn, fps != null && Number.isFinite(fps) ? fps : 0)
-          };
+        if (data.event === "webrtc_stats" && data.summary) {
+          const uid = String(data.userId ?? "");
+          const prevU = lastByUserRef.current[uid];
+          lastByUserRef.current[uid] = pickWebrtcSummaryForDisplay(prevU, data.summary);
+          webrtcDirtyRef.current = true;
+        }
+      };
+    }
+
+    void (async () => {
+      try {
+        const r = await fetch(`${apiBaseUrl}/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: ac.signal
         });
+        if (ac.signal.aborted) return;
+        if (r.status === 401) {
+          setConnected(false);
+          onSessionInvalidRef.current?.();
+          return;
+        }
+        if (!r.ok) {
+          setConnected(false);
+          return;
+        }
+        if (ac.signal.aborted) return;
+        const url = buildWsUrl(apiBaseUrl, token);
+        ws = new WebSocket(url);
+        wireWebSocket(ws);
+      } catch {
+        if (ac.signal.aborted) return;
+        setConnected(false);
       }
-    };
+    })();
 
     return () => {
-      ws.close();
+      clearInterval(elapsedDurationIv);
+      stopFlushInterval();
+      ac.abort();
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          /* */
+        }
+      }
     };
   }, [enabled, token, apiBaseUrl]);
 
@@ -309,6 +728,11 @@ export function useTelemetryWS(apiBaseUrl, token, enabled) {
     lastEvent,
     webrtcAggregate,
     webrtcSeries,
-    webrtcLastByUser
+    webrtcLastByUser,
+    testElapsedSec,
+    elapsedSeries,
+    activeSessionId,
+    seriesTimeMs,
+    testWallStartMs
   };
 }

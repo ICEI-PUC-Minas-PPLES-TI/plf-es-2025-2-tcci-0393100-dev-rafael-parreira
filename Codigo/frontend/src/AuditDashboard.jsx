@@ -1,4 +1,6 @@
 import React from "react";
+import { summaryHasWebrtcActivity } from "./useTelemetryWS.js";
+import TimeSeriesLineChart from "./TimeSeriesLineChart.jsx";
 
 function fmtMs(v) {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -23,36 +25,27 @@ function fmtBytes(v) {
   return `${(v / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
-function SimpleLineChart({ series, label, color, unit = "" }) {
-  const w = 320;
-  const h = 120;
-  const pad = 8;
-  if (!series.length) {
-    return (
-      <div className="chart-placeholder">
-        <span>{label}</span>
-        <p className="muted-small">Aguardando eventos…</p>
-      </div>
-    );
+function fmtDurationSec(sec) {
+  if (sec == null || !Number.isFinite(sec)) return "—";
+  const s = Math.floor(sec % 60);
+  const m = Math.floor(sec / 60) % 60;
+  const h = Math.floor(sec / 3600);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function shortClock(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  } catch {
+    return "";
   }
-  const maxVal = Math.max(...series, 1e-6);
-  const step = (w - pad * 2) / Math.max(series.length - 1, 1);
-  const points = series.map((v, i) => {
-    const x = pad + i * step;
-    const y = h - pad - (v / maxVal) * (h - pad * 2);
-    return `${x},${y}`;
-  });
-  return (
-    <div className="chart-wrap">
-      <span className="chart-label">
-        {label}
-        {unit ? ` (${unit})` : ""}
-      </span>
-      <svg viewBox={`0 0 ${w} ${h}`} className="chart-svg" preserveAspectRatio="none">
-        <polyline fill="none" stroke={color} strokeWidth="2" points={points.join(" ")} />
-      </svg>
-    </div>
-  );
 }
 
 function StatusBars({ counts }) {
@@ -115,7 +108,7 @@ function WebRTCKpis({ agg }) {
 function WebRTCByUserTable({ lastByUser }) {
   const rows = Object.entries(lastByUser)
     .map(([id, s]) => ({ id, ...s }))
-    .filter((r) => r.peerConnections > 0);
+    .filter((r) => summaryHasWebrtcActivity(r));
   if (!rows.length) {
     return <p className="muted-small">Nenhum RTCPeerConnection ativo nos workers (página sem WebRTC ou ainda a conectar).</p>;
   }
@@ -157,6 +150,24 @@ function WebRTCByUserTable({ lastByUser }) {
   );
 }
 
+const CHAOS_OPTIONS = [
+  { value: "off", label: "Desligado" },
+  { value: "slow_3g", label: "Rede lenta (3G)" },
+  { value: "fast_3g", label: "3G rápida" },
+  { value: "high_latency", label: "Alta latência" },
+  { value: "offline", label: "Offline" },
+  { value: "flaky", label: "Intermitente (chaos)" },
+  { value: "dns_failure", label: "Falha DNS (simulada)" }
+];
+
+const CHAOS_QUICK = [
+  { value: "off", label: "Normal" },
+  { value: "slow_3g", label: "3G lenta" },
+  { value: "high_latency", label: "Latência +" },
+  { value: "offline", label: "Offline" },
+  { value: "flaky", label: "Instável" }
+];
+
 export default function AuditDashboard({
   connected,
   lastEvent,
@@ -169,7 +180,22 @@ export default function AuditDashboard({
   feed,
   webrtcAggregate,
   webrtcSeries,
-  webrtcLastByUser
+  webrtcLastByUser,
+  liveTestRunning,
+  testElapsedSec,
+  elapsedSeries,
+  activeSessionId,
+  auditTargetUsers,
+  auditChaos,
+  onAuditTargetChange,
+  onAuditChaosChange,
+  onApplyControl,
+  onPause,
+  onResume,
+  controlBusy,
+  onInjectChaos,
+  seriesTimeMs = { cumulative: [], rps: [], elapsed: [], webrtc: {} },
+  testWallStartMs = null
 }) {
   return (
     <div className="audit-dashboard">
@@ -180,6 +206,92 @@ export default function AuditDashboard({
           {lastEvent ? ` · último evento: ${lastEvent}` : ""}
         </p>
       </div>
+
+      {liveTestRunning && (
+        <div className="audit-controls-panel">
+          <div className="audit-duration-row">
+            <div className="duration-pill">
+              <span className="muted-small">Duração do teste</span>
+              <strong className="duration-value">{fmtDurationSec(testElapsedSec)}</strong>
+              {activeSessionId ? (
+                <code className="session-chip" title="Sessão">
+                  {activeSessionId}
+                </code>
+              ) : null}
+            </div>
+            <div className="audit-pause-row">
+              <button type="button" className="ghost btn-compact" onClick={onPause} disabled={controlBusy}>
+                Pausar
+              </button>
+              <button type="button" className="ghost btn-compact" onClick={onResume} disabled={controlBusy}>
+                Retomar
+              </button>
+            </div>
+          </div>
+          <div className="audit-control-grid">
+            <label className="control-field">
+              <span>Utilizadores virtuais (concorrência)</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={auditTargetUsers}
+                onChange={(e) => onAuditTargetChange(Number(e.target.value))}
+              />
+            </label>
+            <label className="control-field">
+              <span>Perfil de rede (chaos)</span>
+              <select value={auditChaos} onChange={(e) => onAuditChaosChange(e.target.value)}>
+                {CHAOS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="submit btn-apply-control" onClick={onApplyControl} disabled={controlBusy}>
+              {controlBusy ? "A aplicar…" : "Aplicar alterações"}
+            </button>
+          </div>
+          {typeof onInjectChaos === "function" && (
+            <div className="chaos-quick-row">
+              <span className="muted-small chaos-quick-label">Injeção rápida</span>
+              <div className="chaos-quick-buttons">
+                {CHAOS_QUICK.map((q) => (
+                  <button
+                    key={q.value}
+                    type="button"
+                    className={`ghost chaos-chip ${auditChaos === q.value ? "active" : ""}`}
+                    disabled={controlBusy}
+                    onClick={() => onInjectChaos(q.value)}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="muted-small control-hint">
+            Pode alterar o perfil de rede <strong>em qualquer momento</strong>: o servidor atualiza <code>control.json</code> e
+            o runner aplica CDP aos Chromium em ~1&nbsp;s. Use os atalhos ou o menu e &quot;Aplicar&quot;. Pausa congela o dwell
+            na página; utilizadores ajustam a concorrência (pool).
+          </p>
+        </div>
+      )}
+
+      {elapsedSeries?.length > 0 && (
+        <div className="audit-charts elapsed-chart-row">
+          <TimeSeriesLineChart
+            values={elapsedSeries}
+            timeMs={seriesTimeMs.elapsed}
+            testWallStartMs={testWallStartMs}
+            label="Tempo decorrido do teste"
+            color="#94a3b8"
+            unit="s"
+            metricKind="elapsed"
+          />
+        </div>
+      )}
 
       <div className="audit-kpis">
         <div className="kpi">
@@ -203,19 +315,71 @@ export default function AuditDashboard({
           RTP in/out, pares ICE, transporte, jitter, RTT e frames — alinhado ao que o internos do Chrome expõe.
         </p>
         <WebRTCKpis agg={webrtcAggregate} />
+        <p className="muted-small webrtc-chart-note">
+          Os gráficos abaixo só desenham linhas com tráfego WebRTC (RTP, PeerConnections). As curvas de requisições HTTP estão
+          abaixo; tráfego 200/304 do Meet não significa sozinho que a chamada de vídeo subiu.
+        </p>
         <div className="audit-charts webrtc-charts">
-          <SimpleLineChart series={webrtcSeries.rttMs} label="RTT" color="#a78bfa" unit="ms" />
-          <SimpleLineChart series={webrtcSeries.jitterVideo} label="Jitter vídeo" color="#f472b6" unit="ms" />
-          <SimpleLineChart series={webrtcSeries.downlinkKbps} label="Taxa recebida (aprox.)" color="#34d399" unit="kbps" />
-          <SimpleLineChart series={webrtcSeries.fpsIn} label="FPS vídeo (inbound)" color="#fbbf24" unit="fps" />
+          <TimeSeriesLineChart
+            values={webrtcSeries.rttMs}
+            timeMs={seriesTimeMs.webrtc?.rttMs}
+            testWallStartMs={testWallStartMs}
+            label="RTT"
+            color="#a78bfa"
+            unit="ms"
+            metricKind="rtt"
+          />
+          <TimeSeriesLineChart
+            values={webrtcSeries.jitterVideo}
+            timeMs={seriesTimeMs.webrtc?.jitterVideo}
+            testWallStartMs={testWallStartMs}
+            label="Jitter vídeo"
+            color="#f472b6"
+            unit="ms"
+            metricKind="jitterVideo"
+          />
+          <TimeSeriesLineChart
+            values={webrtcSeries.downlinkKbps}
+            timeMs={seriesTimeMs.webrtc?.downlinkKbps}
+            testWallStartMs={testWallStartMs}
+            label="Taxa recebida (aprox.)"
+            color="#34d399"
+            unit="kbps"
+            metricKind="downlinkKbps"
+          />
+          <TimeSeriesLineChart
+            values={webrtcSeries.fpsIn}
+            timeMs={seriesTimeMs.webrtc?.fpsIn}
+            testWallStartMs={testWallStartMs}
+            label="FPS vídeo (inbound)"
+            color="#fbbf24"
+            unit="fps"
+            metricKind="fpsIn"
+          />
         </div>
         <h4 className="webrtc-sub">Por usuário virtual</h4>
         <WebRTCByUserTable lastByUser={webrtcLastByUser} />
       </div>
 
       <div className="audit-charts">
-        <SimpleLineChart series={cumulativeSeries} label="Requisições acumuladas" color="#22c55e" />
-        <SimpleLineChart series={rpsSeries} label="Atividade por segundo (aprox.)" color="#38bdf8" />
+        <TimeSeriesLineChart
+          values={cumulativeSeries}
+          timeMs={seriesTimeMs.cumulative}
+          testWallStartMs={testWallStartMs}
+          label="Requisições acumuladas"
+          color="#22c55e"
+          unit="req"
+          metricKind="cumulative"
+        />
+        <TimeSeriesLineChart
+          values={rpsSeries}
+          timeMs={seriesTimeMs.rps}
+          testWallStartMs={testWallStartMs}
+          label="Atividade por segundo (aprox.)"
+          color="#38bdf8"
+          unit="evt/s"
+          metricKind="rps"
+        />
       </div>
 
       <div className="audit-block">
@@ -231,7 +395,10 @@ export default function AuditDashboard({
           ) : (
             feed.map((item, i) => (
               <li key={`${item.ts}-${i}`} className={item.kind === "fail" ? "feed-fail" : ""}>
-                <code>{item.text}</code>
+                <code>
+                  {item.ts ? <span className="feed-time">{shortClock(item.ts)} · </span> : null}
+                  {item.text}
+                </code>
               </li>
             ))
           )}

@@ -1,3 +1,6 @@
+// Servidor Stream Sentry (pacote main repartido por main.go e tests_api.go).
+// A partir desta pasta execute: go run .
+// Não use apenas "go run main.go" — isso exclui os outros ficheiros .go e falha a compilação.
 package main
 
 import (
@@ -50,6 +53,7 @@ type authServer struct {
 	mu             sync.RWMutex
 	testMu         sync.Mutex
 	testRunning    bool
+	testCancel     context.CancelFunc // cancela o contexto do exec do audit (finalizar teste)
 	usersStorePath string
 	persistToDisk  bool
 }
@@ -201,6 +205,13 @@ func main() {
 	mux.HandleFunc("GET /auth/me", server.handleMe)
 	mux.HandleFunc("POST /puppeteer/smoke", server.handlePuppeteerSmoke)
 	mux.HandleFunc("POST /test/start", server.handleTestStart)
+	mux.HandleFunc("POST /test/stop", server.handleTestStop)
+	mux.HandleFunc("POST /test/control", server.handleTestControl)
+	mux.HandleFunc("POST /test/pause", server.handleTestPause)
+	mux.HandleFunc("POST /test/resume", server.handleTestResume)
+	mux.HandleFunc("GET /tests/history", server.handleGetTestHistory)
+	mux.HandleFunc("GET /reports/session/{id}", server.handleGetSessionReportDetail)
+	mux.HandleFunc("GET /reports/export", server.handleExportReports)
 	mux.HandleFunc("GET /ws/telemetry", server.handleWSTelemetry)
 
 	addr := fmt.Sprintf(":%d", port)
@@ -498,9 +509,10 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type request struct {
-		APIURL       string `json:"apiUrl"`
-		AccessToken  string `json:"accessToken"`
-		VirtualUsers int    `json:"virtualUsers"`
+		APIURL       string            `json:"apiUrl"`
+		AccessToken  string            `json:"accessToken"`
+		VirtualUsers int               `json:"virtualUsers"`
+		Chaos        *chaosProfileJSON `json:"chaos,omitempty"`
 	}
 
 	var payload request
@@ -527,22 +539,70 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(payload.AccessToken)
 	users := payload.VirtualUsers
 
-	go s.runAuditTest(apiURL, token, users)
+	cp := chaosProfileJSON{Profile: "off"}
+	if payload.Chaos != nil && strings.TrimSpace(payload.Chaos.Profile) != "" {
+		cp.Profile = strings.TrimSpace(payload.Chaos.Profile)
+	}
+	if err := writeInitialAuditControl(users, cp); err != nil {
+		log.Printf("aviso: escrever control.json: %v", err)
+	}
+
+	sessionID := newSessionID()
+	go s.runAuditTest(apiURL, token, users, sessionID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"message": "test started; connect to WebSocket /ws/telemetry for live audit",
+		"message":   "test started; connect to WebSocket /ws/telemetry for live audit",
+		"sessionId": sessionID,
 	})
 }
 
-func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int) {
+func (s *authServer) handleTestStop(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
+		return
+	}
+
+	s.testMu.Lock()
+	if !s.testRunning || s.testCancel == nil {
+		s.testMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "nenhum teste em execução"})
+		return
+	}
+	stop := s.testCancel
+	s.testMu.Unlock()
+
+	stop()
+
+	b, _ := json.Marshal(map[string]any{
+		"type":    "telemetry",
+		"event":   "test_stopped",
+		"reason":  "requested",
+		"message": "teste interrompido pelo utilizador",
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	globalHub.broadcast(b)
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "teste em encerramento"})
+}
+
+func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int, sessionID string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(25*time.Minute, func() { cancel() })
+
+	s.testMu.Lock()
+	s.testCancel = cancel
+	s.testMu.Unlock()
+
+	startedAt := time.Now()
+
 	defer func() {
+		timer.Stop()
+		cancel()
 		s.testMu.Lock()
 		s.testRunning = false
+		s.testCancel = nil
 		s.testMu.Unlock()
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
-	defer cancel()
 
 	scriptPath := filepath.Join("puppeteer", "run-audit.mjs")
 	cmd := exec.CommandContext(
@@ -552,6 +612,11 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		apiURL,
 		accessToken,
 		strconv.Itoa(virtualUsers),
+	)
+	cmd.Env = append(os.Environ(),
+		"TEST_SESSION_ID="+sessionID,
+		"TEST_STARTED_AT="+startedAt.UTC().Format(time.RFC3339Nano),
+		"STREAM_SENTRY_POOL=1",
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -573,6 +638,20 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 	buffer := make([]byte, 0, 256*1024)
 	scanner.Buffer(buffer, 1024*1024)
 
+	reportPath := sessionTelemetryNDJSONPath(sessionID)
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
+		log.Printf("aviso: criar pasta de relatórios: %v", err)
+	}
+	repFile, repErr := os.OpenFile(reportPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if repErr != nil {
+		log.Printf("aviso: abrir ficheiro de telemetria NDJSON: %v", repErr)
+	}
+	if repFile != nil {
+		defer repFile.Close()
+	}
+
+	rollup := newRollupAccumulator()
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -580,6 +659,14 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		}
 		copyLine := append([]byte(nil), line...)
 		globalHub.broadcast(copyLine)
+		if repFile != nil {
+			if _, werr := repFile.Write(line); werr != nil {
+				log.Printf("aviso: escrever relatório: %v", werr)
+			} else {
+				_, _ = repFile.Write([]byte("\n"))
+			}
+		}
+		rollup.FeedLine(line)
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
@@ -587,10 +674,47 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		globalHub.broadcast(b)
 	}
 
-	if waitErr := cmd.Wait(); waitErr != nil {
+	waitErr := cmd.Wait()
+	endedAt := time.Now()
+	dur := endedAt.Sub(startedAt).Seconds()
+
+	rec := TestHistoryRecord{
+		ID:           sessionID,
+		StartedAt:    startedAt,
+		EndedAt:      endedAt,
+		DurationSec:  dur,
+		APIURL:       apiURL,
+		VirtualUsers: virtualUsers,
+		ExitOK:       waitErr == nil,
+		Summary:      rollup.ToSummary(),
+	}
+	if repFile != nil {
+		rec.TelemetryFile = filepath.ToSlash(filepath.Join("puppeteer", "reports", sessionID+".ndjson"))
+	}
+	if ctrl, err := readAuditControl(); err == nil {
+		rec.ChaosProfile = strings.TrimSpace(ctrl.Chaos.Profile)
+		if rec.ChaosProfile == "" {
+			rec.ChaosProfile = "off"
+		}
+	}
+	if waitErr != nil {
+		rec.ErrorMessage = waitErr.Error()
 		b, _ := json.Marshal(map[string]any{"type": "telemetry", "event": "error", "message": waitErr.Error()})
 		globalHub.broadcast(b)
 	}
+	appendTestHistory(rec)
+
+	summary, _ := json.Marshal(map[string]any{
+		"type":         "telemetry",
+		"event":        "server_audit_summary",
+		"sessionId":    sessionID,
+		"durationSec":  dur,
+		"startedAt":    startedAt.UTC().Format(time.RFC3339Nano),
+		"endedAt":      endedAt.UTC().Format(time.RFC3339Nano),
+		"virtualUsers": virtualUsers,
+		"exitOk":       waitErr == nil,
+	})
+	globalHub.broadcast(summary)
 }
 
 func (s *authServer) generateToken(u user) (string, error) {

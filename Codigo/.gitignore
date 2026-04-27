@@ -1,5 +1,8 @@
 backend/.env
 backend/stream-sentry-users.json
+backend/stream-sentry-test-history.json
+backend/puppeteer/control.json
+backend/puppeteer/reports/
 backend/*.exe
 backend/puppeteer/node_modules/
 
