@@ -796,13 +796,24 @@ select {
 .history-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.35rem;
-  min-width: 140px;
+  width: max-content;
+  max-width: 100%;
+}
+
+.history-actions-cell {
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .btn-tiny {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-top: 0;
-  padding: 0.25rem 0.45rem;
+  min-height: 1.9rem;
+  padding: 0.35rem 0.55rem;
   font-size: 0.72rem;
   font-weight: 600;
 }

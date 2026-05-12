@@ -617,6 +617,7 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		"TEST_SESSION_ID="+sessionID,
 		"TEST_STARTED_AT="+startedAt.UTC().Format(time.RFC3339Nano),
 		"STREAM_SENTRY_POOL=1",
+		"STREAM_SENTRY_WORKER_THREADS=1",
 	)
 
 	stdout, err := cmd.StdoutPipe()

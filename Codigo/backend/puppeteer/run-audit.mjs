@@ -3,8 +3,18 @@ import { createCursor } from "ghost-cursor";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
-const [, , apiUrl, accessToken, virtualUsersArg] = process.argv;
+const runtimeConfig = isMainThread
+  ? {
+      apiUrl: process.argv[2],
+      accessToken: process.argv[3],
+      virtualUsers: process.argv[4]
+    }
+  : workerData || {};
+const apiUrl = runtimeConfig.apiUrl;
+const accessToken = runtimeConfig.accessToken;
+const virtualUsersArg = runtimeConfig.virtualUsers;
 const virtualUsers = Number.parseInt(virtualUsersArg || "1", 10);
 const shouldOpenBrowser = process.env.PUPPETEER_HEADFUL === "1";
 const ignoreHttpsErrors = process.env.PUPPETEER_IGNORE_HTTPS_ERRORS === "1";
@@ -119,10 +129,13 @@ function buildChromiumArgs() {
 /** Concorrência dinâmica (pool): ativar com STREAM_SENTRY_POOL=1 — mantém N utilizadores até parar o teste. */
 const streamSentryPool =
   process.env.STREAM_SENTRY_POOL === "1" || process.env.STREAM_SENTRY_POOL === "true";
+/** Isola cada VU em uma Worker Thread; desligar com STREAM_SENTRY_WORKER_THREADS=0. */
+const useWorkerThreads =
+  isMainThread && process.env.STREAM_SENTRY_WORKER_THREADS !== "0" && process.env.STREAM_SENTRY_WORKER_THREADS !== "false";
 
-const sessionIdEnv = process.env.TEST_SESSION_ID || "";
+const sessionIdEnv = runtimeConfig.sessionId || process.env.TEST_SESSION_ID || "";
 const testStartedAtMs = (() => {
-  const raw = process.env.TEST_STARTED_AT;
+  const raw = runtimeConfig.testStartedAt || process.env.TEST_STARTED_AT;
   if (!raw) return Date.now();
   const d = Date.parse(raw);
   return Number.isNaN(d) ? Date.now() : d;
@@ -256,6 +269,10 @@ if (!apiUrl || !accessToken || Number.isNaN(virtualUsers)) {
   process.exit(1);
 }
 
+function writeTelemetryPayload(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
 function emit(obj) {
   const payload = {
     ...obj,
@@ -263,7 +280,11 @@ function emit(obj) {
     elapsedSec: elapsedSec(),
     ts: obj.ts || new Date().toISOString()
   };
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+  if (!isMainThread && parentPort) {
+    parentPort.postMessage({ kind: "telemetry", payload });
+    return;
+  }
+  writeTelemetryPayload(payload);
 }
 
 /**
@@ -2016,6 +2037,82 @@ function requestPoolShutdown() {
 process.on("SIGTERM", requestPoolShutdown);
 process.on("SIGINT", requestPoolShutdown);
 
+function startVirtualUserWorker(userId) {
+  const worker = new Worker(new URL(import.meta.url), {
+    workerData: {
+      apiUrl,
+      accessToken,
+      virtualUsers,
+      userId,
+      sessionId: sessionIdEnv,
+      testStartedAt: new Date(testStartedAtMs).toISOString()
+    }
+  });
+
+  let settled = false;
+  let requestedStop = false;
+  const done = new Promise((resolve) => {
+    worker.on("message", (msg) => {
+      if (msg?.kind === "telemetry" && msg.payload) {
+        writeTelemetryPayload(msg.payload);
+      }
+    });
+    worker.on("error", (err) => {
+      emit({
+        type: "telemetry",
+        event: "user_worker_unhandled",
+        userId,
+        message: err?.message || String(err)
+      });
+    });
+    worker.on("exit", (code) => {
+      settled = true;
+      if (code !== 0 && !requestedStop) {
+        emit({
+          type: "telemetry",
+          event: "user_worker_unhandled",
+          userId,
+          message: `worker exited with code ${code}`
+        });
+      }
+      resolve();
+    });
+  });
+
+  const stop = () => {
+    if (settled) return;
+    requestedStop = true;
+    worker.postMessage({ type: "shutdown" });
+    const killTimer = setTimeout(() => {
+      if (!settled) worker.terminate().catch(() => {});
+    }, 5000);
+    if (typeof killTimer.unref === "function") killTimer.unref();
+  };
+
+  return { worker, done, stop };
+}
+
+async function runVirtualUserInWorkerThread() {
+  const userId = Number.parseInt(String(runtimeConfig.userId || "1"), 10);
+  const ac = new AbortController();
+  let browser = null;
+
+  parentPort?.on("message", (msg) => {
+    if (msg?.type === "shutdown") {
+      ac.abort();
+      void browser?.close().catch(() => {});
+    }
+  });
+
+  await runVirtualUser(Number.isFinite(userId) ? userId : 1, {
+    signal: ac.signal,
+    getControl: readControlSync,
+    onBrowser: (b) => {
+      browser = b;
+    }
+  });
+}
+
 async function runPoolSupervisor() {
   const inflight = new Map();
   let nextId = 0;
@@ -2025,7 +2122,8 @@ async function runPoolSupervisor() {
   while (true) {
     if (poolShuttingDown) {
       for (const [, w] of inflight) {
-        w.ac.abort();
+        w.stop?.();
+        w.ac?.abort();
         await w.browser?.close().catch(() => {});
       }
       inflight.clear();
@@ -2050,7 +2148,8 @@ async function runPoolSupervisor() {
       const id = ids.shift();
       const w = id !== undefined ? inflight.get(id) : null;
       if (!w) continue;
-      w.ac.abort();
+      w.stop?.();
+      w.ac?.abort();
       await w.browser?.close().catch(() => {});
       inflight.delete(id);
     }
@@ -2058,28 +2157,36 @@ async function runPoolSupervisor() {
     while (inflight.size < want && !poolShuttingDown) {
       nextId += 1;
       const id = nextId;
-      const ac = new AbortController();
-      const entry = { ac, browser: null };
-      inflight.set(id, entry);
-      void runVirtualUser(id, {
-        signal: ac.signal,
-        getControl: readControlSync,
-        onBrowser: (b) => {
-          entry.browser = b;
-        }
-      })
-        .catch((err) => {
-          console.error("runVirtualUser", id, err);
-          emit({
-            type: "telemetry",
-            event: "user_worker_unhandled",
-            userId: id,
-            message: err?.message || String(err)
-          });
-        })
-        .finally(() => {
+      if (useWorkerThreads) {
+        const entry = startVirtualUserWorker(id);
+        inflight.set(id, entry);
+        void entry.done.finally(() => {
           inflight.delete(id);
         });
+      } else {
+        const ac = new AbortController();
+        const entry = { ac, browser: null };
+        inflight.set(id, entry);
+        void runVirtualUser(id, {
+          signal: ac.signal,
+          getControl: readControlSync,
+          onBrowser: (b) => {
+            entry.browser = b;
+          }
+        })
+          .catch((err) => {
+            console.error("runVirtualUser", id, err);
+            emit({
+              type: "telemetry",
+              event: "user_worker_unhandled",
+              userId: id,
+              message: err?.message || String(err)
+            });
+          })
+          .finally(() => {
+            inflight.delete(id);
+          });
+      }
       await delay(spawnGap);
     }
 
@@ -2096,6 +2203,7 @@ async function main() {
     virtualUsers,
     batchSize,
     poolMode: streamSentryPool,
+    workerThreads: useWorkerThreads,
     targetUrl: apiUrl
   });
 
@@ -2106,7 +2214,11 @@ async function main() {
       const end = Math.min(start + batchSize - 1, virtualUsers);
       const tasks = [];
       for (let userId = start; userId <= end; userId++) {
-        tasks.push(runVirtualUser(userId, { getControl: readControlSync }));
+        if (useWorkerThreads) {
+          tasks.push(startVirtualUserWorker(userId).done);
+        } else {
+          tasks.push(runVirtualUser(userId, { getControl: readControlSync }));
+        }
       }
       await Promise.all(tasks);
     }
@@ -2116,9 +2228,15 @@ async function main() {
     type: "telemetry",
     event: "test_complete",
     virtualUsers,
-    poolMode: streamSentryPool
+    poolMode: streamSentryPool,
+    workerThreads: useWorkerThreads
   });
   clearInterval(chaosTicker);
 }
 
-await main();
+if (isMainThread) {
+  await main();
+} else {
+  await runVirtualUserInWorkerThread();
+  clearInterval(chaosTicker);
+}

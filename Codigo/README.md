@@ -36,6 +36,7 @@ Estrutura criada para o Stream Sentry:
 - O frontend abre `GET /ws/telemetry?token=<JWT>` e recebe eventos NDJSON (requisições, respostas, falhas) enquanto roda `puppeteer/run-audit.mjs`.
 - Apenas um teste por vez no servidor; se já houver um em execução, a API responde **409** em novo `/test/start`; `/test/stop` sem teste ativo responde **409**.
 - Telemetria **WebRTC**: o script injeta um hook em `RTCPeerConnection` e envia eventos `webrtc_stats` (campos de `getStats()` no estilo *webrtc-internals*: RTP in/out, par ICE, transporte, jitter, frames). Intervalo opcional: `WEBRTC_STATS_INTERVAL_MS` (padrão 2000). O Chromium do Puppeteer sobe com flags de mídia simulada para salas que pedem câmera/microfone.
+- Com vários usuários virtuais, cada Chromium roda em uma **Worker Thread** separada (`STREAM_SENTRY_WORKER_THREADS=1`, padrão no backend) para evitar que um único event loop do Node atrase as coletas de `getStats()`. Para depuração, use `STREAM_SENTRY_WORKER_THREADS=0`.
 - Permanência na página após o carregamento: `AUDIT_PAGE_DWELL_MS` (padrão **8000** ms). Para Jitsi, prefira **20000–45000** para a chamada estabilizar e aparecerem métricas.
 
 ## Testar com Jitsi Meet (recomendado)

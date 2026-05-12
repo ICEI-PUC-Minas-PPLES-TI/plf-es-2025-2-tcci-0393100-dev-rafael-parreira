@@ -831,25 +831,27 @@ export default function App() {
                             <td>{row.summary?.http?.requests ?? "—"}</td>
                             <td>{row.summary?.webrtc?.statsSamples ?? "—"}</td>
                             <td>{row.exitOk ? "OK" : "Erro"}</td>
-                            <td className="history-actions">
-                              <button
-                                type="button"
-                                className="ghost btn-tiny"
-                                disabled={reportBusy}
-                                title="JSON com metadados + todos os eventos NDJSON"
-                                onClick={() => handleDownloadReport("json", { sessionId: row.id, includeEvents: true })}
-                              >
-                                JSON+log
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost btn-tiny"
-                                disabled={reportBusy}
-                                title="Uma linha por evento (evento, tempo, JSON)"
-                                onClick={() => handleDownloadReport("csv", { sessionId: row.id, includeEvents: true })}
-                              >
-                                CSV
-                              </button>
+                            <td className="history-actions-cell">
+                              <div className="history-actions">
+                                <button
+                                  type="button"
+                                  className="ghost btn-tiny"
+                                  disabled={reportBusy}
+                                  title="JSON com metadados + todos os eventos NDJSON"
+                                  onClick={() => handleDownloadReport("json", { sessionId: row.id, includeEvents: true })}
+                                >
+                                  JSON+log
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost btn-tiny"
+                                  disabled={reportBusy}
+                                  title="Uma linha por evento (evento, tempo, JSON)"
+                                  onClick={() => handleDownloadReport("csv", { sessionId: row.id, includeEvents: true })}
+                                >
+                                  CSV
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
