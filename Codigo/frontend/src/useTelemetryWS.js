@@ -42,7 +42,8 @@ export function summaryHasWebrtcActivity(s) {
 
 function totalRtcpBytesIn(s) {
   if (!s) return 0;
-  return (s.inboundVideo?.bytesReceived || 0) + (s.inboundAudio?.bytesReceived || 0);
+  const rtpBytes = (s.inboundVideo?.bytesReceived || 0) + (s.inboundAudio?.bytesReceived || 0);
+  return rtpBytes > 0 ? rtpBytes : s.transport?.bytesReceived || 0;
 }
 
 /**
@@ -130,8 +131,10 @@ function aggregateWebRTC(lastByUser) {
     pr += (r.inboundVideo?.packetsReceived || 0) + (r.inboundAudio?.packetsReceived || 0);
     fd += r.inboundVideo?.framesDecoded || 0;
     fe += r.outboundVideo?.framesEncoded || 0;
-    bin += (r.inboundVideo?.bytesReceived || 0) + (r.inboundAudio?.bytesReceived || 0);
-    bout += (r.outboundVideo?.bytesSent || 0) + (r.outboundAudio?.bytesSent || 0);
+    const inboundRtpBytes = (r.inboundVideo?.bytesReceived || 0) + (r.inboundAudio?.bytesReceived || 0);
+    const outboundRtpBytes = (r.outboundVideo?.bytesSent || 0) + (r.outboundAudio?.bytesSent || 0);
+    bin += inboundRtpBytes > 0 ? inboundRtpBytes : r.transport?.bytesReceived || 0;
+    bout += outboundRtpBytes > 0 ? outboundRtpBytes : r.transport?.bytesSent || 0;
     if (r.inboundVideo?.frameWidth && r.inboundVideo?.frameHeight) {
       res = `${r.inboundVideo.frameWidth}×${r.inboundVideo.frameHeight}`;
     }
@@ -159,6 +162,157 @@ function aggregateWebRTC(lastByUser) {
   };
 }
 
+function timestampFromEvent(data) {
+  const parsed = Date.parse(data?.ts || "");
+  return Number.isNaN(parsed) ? Date.now() : parsed;
+}
+
+function emptyTelemetrySnapshot() {
+  return {
+    connected: false,
+    lastEvent: "",
+    requestTotal: 0,
+    responseTotal: 0,
+    failTotal: 0,
+    cumulativeSeries: [],
+    rpsSeries: [],
+    statusCounts: {},
+    feed: [],
+    webrtcAggregate: aggregateWebRTC({}),
+    webrtcSeries: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] },
+    webrtcLastByUser: {},
+    testElapsedSec: null,
+    activeSessionId: "",
+    seriesTimeMs: {
+      cumulative: [],
+      rps: [],
+      elapsed: [],
+      webrtc: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] }
+    },
+    testWallStartMs: null
+  };
+}
+
+export function buildTelemetrySnapshotFromEvents(events = [], session = {}) {
+  const snapshot = emptyTelemetrySnapshot();
+  const totals = { req: 0, res: 0, fail: 0 };
+  const statusMap = {};
+  const feed = [];
+  const lastByUser = {};
+  const webrtcSeries = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+  const webrtcTimeMs = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+  const cumulativeSeries = [];
+  const cumulativeTimeMs = [];
+  const rpsBuckets = new Map();
+  let bytesTotal = { ts: 0, sumBytes: 0 };
+  let testWallStartMs = Date.parse(session?.startedAt || "");
+  if (Number.isNaN(testWallStartMs)) testWallStartMs = null;
+
+  const pushLimited = (arr, value, cap) => {
+    arr.push(value);
+    if (arr.length > cap) arr.shift();
+  };
+
+  const prependFeed = (item) => {
+    feed.unshift(item);
+    if (feed.length > 40) feed.pop();
+  };
+
+  const appendWebrtcSample = (sampleMs) => {
+    let sumB = 0;
+    for (const s of Object.values(lastByUser)) {
+      if (s) sumB += totalRtcpBytesIn(s);
+    }
+    let downKbps = 0;
+    if (bytesTotal.ts && sampleMs > bytesTotal.ts && sumB >= bytesTotal.sumBytes) {
+      const dt = (sampleMs - bytesTotal.ts) / 1000;
+      downKbps = ((sumB - bytesTotal.sumBytes) * 8) / 1000 / Math.max(dt, 0.001);
+    }
+    bytesTotal = { ts: sampleMs, sumBytes: sumB };
+    const hasRtcSample = Object.values(lastByUser).some((s) => s && summaryHasWebrtcActivity(s));
+    if (!hasRtcSample && downKbps <= 0.75) return;
+
+    const averages = seriesAveragesFromLastByUser(lastByUser);
+    const cap = 60;
+    const pushMetric = (key, value) => {
+      pushLimited(webrtcSeries[key], value != null && Number.isFinite(value) ? value : 0, cap);
+      pushLimited(webrtcTimeMs[key], sampleMs, cap);
+    };
+    pushMetric("rttMs", averages.rtt);
+    pushMetric("jitterVideo", averages.jitterVideoMs);
+    pushMetric("downlinkKbps", downKbps);
+    pushMetric("fpsIn", averages.fps);
+  };
+
+  for (const raw of events || []) {
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!data || data.type !== "telemetry") continue;
+    const ts = timestampFromEvent(data);
+    snapshot.lastEvent = data.event || snapshot.lastEvent;
+    if (data.sessionId) snapshot.activeSessionId = String(data.sessionId);
+
+    if (data.event === "test_start") {
+      const startedAtMs = Date.parse(data.startedAtISO || "");
+      if (!Number.isNaN(startedAtMs)) testWallStartMs = startedAtMs;
+      if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
+        snapshot.testElapsedSec = Number(data.elapsedSec);
+      }
+      continue;
+    }
+
+    if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
+      snapshot.testElapsedSec = Number(data.elapsedSec);
+    }
+
+    if (data.event === "request") {
+      totals.req += 1;
+      pushLimited(cumulativeSeries, totals.req, 100);
+      pushLimited(cumulativeTimeMs, ts, 100);
+      const sec = Math.floor(ts / 1000) * 1000;
+      rpsBuckets.set(sec, (rpsBuckets.get(sec) || 0) + 1);
+      prependFeed({ kind: "req", text: `${data.method} ${(data.url || "").slice(0, 72)}`, ts: data.ts });
+    } else if (data.event === "response") {
+      totals.res += 1;
+      const st = String(data.status ?? "?");
+      statusMap[st] = (statusMap[st] || 0) + 1;
+    } else if (data.event === "request_failed") {
+      totals.fail += 1;
+      prependFeed({ kind: "fail", text: data.errorText || "fail", ts: data.ts });
+    } else if (data.event === "webrtc_stats" && data.summary) {
+      const uid = String(data.userId ?? "");
+      lastByUser[uid] = pickWebrtcSummaryForDisplay(lastByUser[uid], data.summary);
+      appendWebrtcSample(ts);
+    } else if (data.event === "chaos_profile_changed" && data.profile != null) {
+      prependFeed({ kind: "info", text: `Chaos de rede: perfil «${data.profile}»`, ts: data.ts });
+    } else if (data.event === "test_stopped" || data.event === "test_complete" || data.event === "server_audit_summary") {
+      if (data.message) prependFeed({ kind: "info", text: String(data.message), ts: data.ts });
+    }
+  }
+
+  const sortedBuckets = [...rpsBuckets.entries()].sort((a, b) => a[0] - b[0]).slice(-80);
+  snapshot.requestTotal = totals.req;
+  snapshot.responseTotal = totals.res;
+  snapshot.failTotal = totals.fail;
+  snapshot.cumulativeSeries = cumulativeSeries;
+  snapshot.rpsSeries = sortedBuckets.map(([, count]) => count);
+  snapshot.statusCounts = statusMap;
+  snapshot.feed = feed;
+  snapshot.webrtcLastByUser = lastByUser;
+  snapshot.webrtcAggregate = aggregateWebRTC(lastByUser);
+  snapshot.webrtcSeries = webrtcSeries;
+  snapshot.seriesTimeMs = {
+    cumulative: cumulativeTimeMs,
+    rps: sortedBuckets.map(([ts]) => ts),
+    elapsed: [],
+    webrtc: webrtcTimeMs
+  };
+  snapshot.testWallStartMs = testWallStartMs;
+  if (!snapshot.activeSessionId && session?.id) snapshot.activeSessionId = session.id;
+  if (snapshot.testElapsedSec == null && session?.durationSec != null) snapshot.testElapsedSec = Number(session.durationSec);
+  snapshot.lastEvent = snapshot.lastEvent || "server_audit_summary";
+  return snapshot;
+}
+
 export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
   const onTestRunFinishedRef = useRef(options?.onTestRunFinished);
   onTestRunFinishedRef.current = options?.onTestRunFinished;
@@ -180,6 +334,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
   const lastByUserRef = useRef({});
   /** Soma de bytes (todos os VU) + timestamp — taxa recebida coerente com vários browser. */
   const webrtcBytesTotalRef = useRef({ ts: 0, sumBytes: 0 });
+  const webrtcFramesByUserRef = useRef({});
 
   const [webrtcAggregate, setWebrtcAggregate] = useState(() => aggregateWebRTC({}));
   const [webrtcSeries, setWebrtcSeries] = useState({
@@ -254,6 +409,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       rpsHistoryTimeRef.current = [];
       lastByUserRef.current = {};
       webrtcBytesTotalRef.current = { ts: 0, sumBytes: 0 };
+      webrtcFramesByUserRef.current = {};
       webrtcSeriesRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
       webrtcTimeMsRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
       cumulativeTimeMsRef.current = [];
@@ -293,22 +449,24 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       }
     };
 
-    const flushWebrtcSeriesFromRef = () => {
-      if (!webrtcDirtyRef.current) return;
-      webrtcDirtyRef.current = false;
+    const timestampFromEvent = (data) => {
+      const parsed = Date.parse(data?.ts || "");
+      return Number.isNaN(parsed) ? Date.now() : parsed;
+    };
+
+    const appendWebrtcSeriesSample = (sampleMs) => {
       const m = lastByUserRef.current;
       let sumB = 0;
       for (const s of Object.values(m)) {
         if (s) sumB += totalRtcpBytesIn(s);
       }
-      const now = Date.now();
       const prevB = webrtcBytesTotalRef.current;
       let downKbps = 0;
-      if (prevB.ts && now > prevB.ts && sumB >= prevB.sumBytes) {
-        const dt = (now - prevB.ts) / 1000;
+      if (prevB.ts && sampleMs > prevB.ts && sumB >= prevB.sumBytes) {
+        const dt = (sampleMs - prevB.ts) / 1000;
         downKbps = ((sumB - prevB.sumBytes) * 8) / 1000 / Math.max(dt, 0.001);
       }
-      webrtcBytesTotalRef.current = { ts: now, sumBytes: sumB };
+      webrtcBytesTotalRef.current = { ts: sampleMs, sumBytes: sumB };
       const hasRtcSample = Object.values(m).some((s) => s && summaryHasWebrtcActivity(s));
       /** Sem tráfego RTP/PCs, não empilhar zeros — senão os gráficos parecem “válidos” e confundem com HTTP. */
       const meaningfulDownlink = downKbps > 0.75;
@@ -320,12 +478,11 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       const jv = sa.jitterVideoMs;
       const fps = sa.fps;
       const cap = 60;
-      const nowMs = Date.now();
       const push = (arr, v) => {
         const x = v != null && Number.isFinite(v) ? v : 0;
         return [...arr, x].slice(-cap);
       };
-      const pushT = (tarr) => [...tarr, nowMs].slice(-cap);
+      const pushT = (tarr) => [...tarr, sampleMs || Date.now()].slice(-cap);
       const ws = webrtcSeriesRef.current;
       const wst = webrtcTimeMsRef.current;
       ws.rttMs = push(ws.rttMs, rtt != null && Number.isFinite(rtt) ? rtt : 0);
@@ -336,6 +493,11 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       wst.downlinkKbps = pushT(wst.downlinkKbps);
       ws.fpsIn = push(ws.fpsIn, fps != null && Number.isFinite(fps) ? fps : 0);
       wst.fpsIn = pushT(wst.fpsIn);
+    };
+
+    const flushWebrtcSeriesFromRef = () => {
+      if (!webrtcDirtyRef.current) return;
+      webrtcDirtyRef.current = false;
     };
 
     const flushThrottled = () => {
@@ -429,7 +591,8 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
 
         if (data.event === "test_start") {
           resetMetrics();
-          const wall = Date.now();
+          const startedAtMs = Date.parse(data.startedAtISO || "");
+          const wall = Number.isNaN(startedAtMs) ? Date.now() : startedAtMs;
           setTestWallStartMs(wall);
           if (data.sessionId) sessionIdRef.current = String(data.sessionId);
           if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
@@ -603,6 +766,59 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
           prependFeed({ kind: "info", text: data.message, ts: data.ts });
         }
 
+        if (data.event === "zoom_url_normalized" && data.url) {
+          prependFeed({ kind: "info", text: `Zoom: URL convertida para web client — ${String(data.url).slice(0, 160)}`, ts: data.ts });
+        }
+        if (data.event === "zoom_join_mode" && data.message) {
+          prependFeed({ kind: "info", text: `Zoom: ${String(data.message).slice(0, 260)}`, ts: data.ts });
+        }
+        if (data.event === "zoom_join_step" && data.action) {
+          prependFeed({ kind: "info", text: `Zoom: ação de entrada — ${String(data.action).slice(0, 140)}`, ts: data.ts });
+        }
+        if (data.event === "zoom_join_state" && data.state) {
+          const st = data.state;
+          const buttons = Array.isArray(st.buttons) && st.buttons.length ? ` botões: ${st.buttons.slice(0, 5).join(" | ")}` : "";
+          const text = st.text ? ` texto: ${String(st.text).slice(0, 180)}` : "";
+          const error = st.error ? ` erro: ${String(st.error).slice(0, 120)}` : "";
+          prependFeed({
+            kind: "info",
+            text: `Zoom estado (${data.label || "check"}): ${st.title || ""}${buttons}${text}${error}`.slice(0, 360),
+            ts: data.ts
+          });
+        }
+        if (data.event === "zoom_hint" && data.message) {
+          prependFeed({ kind: "info", text: String(data.message).slice(0, 260), ts: data.ts });
+        }
+        if (data.event === "zoom_blocked" && data.message) {
+          prependFeed({ kind: "fail", text: `Zoom bloqueado: ${String(data.message).slice(0, 240)}`, ts: data.ts });
+        }
+        if (data.event === "zoom_stats_debug" && data.debug) {
+          const types = Object.entries(data.debug.types || {})
+            .sort((a, b) => Number(b[1]) - Number(a[1]))
+            .slice(0, 8)
+            .map(([type, count]) => `${type}:${count}`)
+            .join(", ");
+          const sample = (data.debug.samples || [])
+            .slice(0, 3)
+            .map((s) => {
+              const fields = ["kind", "mediaType", "jitter", "framesDecoded", "framesReceived", "framesRendered", "framesPerSecond", "bytesReceived", "packetsReceived"]
+                .filter((k) => s[k] != null)
+                .map((k) => `${k}=${s[k]}`)
+                .join(" ");
+              return `${s.type}${s.kind ? `/${s.kind}` : ""}${fields ? ` ${fields}` : ""}`;
+            })
+            .join(" | ");
+          const videos = (data.debug.videoElements || [])
+            .slice(0, 3)
+            .map((v) => `${v.width || 0}x${v.height || 0}/rs${v.readyState}`)
+            .join(", ");
+          prependFeed({
+            kind: "info",
+            text: `Zoom stats t${data.tick ?? "?"}: PCs=${data.debug.peerConnections ?? "?"}; tipos ${types || "—"}; vídeos ${videos || "—"}; amostras ${sample || "—"}`,
+            ts: data.ts
+          });
+        }
+
         /**
          * No modo *pool* o runner incrementa `userId` a cada browser (1,2,3,…). Os workers
          * que já terminam emitem `user_done` — se não retirarmos do mapa, o dashboard
@@ -670,7 +886,30 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
         if (data.event === "webrtc_stats" && data.summary) {
           const uid = String(data.userId ?? "");
           const prevU = lastByUserRef.current[uid];
+          const sampleMs = timestampFromEvent(data);
+          const framesDecoded = Number(data.summary?.inboundVideo?.framesDecoded);
+          const prevFrames = webrtcFramesByUserRef.current[uid];
+          if (
+            Number.isFinite(framesDecoded) &&
+            data.summary?.inboundVideo &&
+            data.summary.inboundVideo.framesPerSecond == null &&
+            prevFrames?.ts &&
+            sampleMs > prevFrames.ts &&
+            framesDecoded >= prevFrames.frames
+          ) {
+            const fps = (framesDecoded - prevFrames.frames) / ((sampleMs - prevFrames.ts) / 1000);
+            if (Number.isFinite(fps) && fps > 0) {
+              data.summary = {
+                ...data.summary,
+                inboundVideo: { ...data.summary.inboundVideo, framesPerSecond: fps }
+              };
+            }
+          }
+          if (Number.isFinite(framesDecoded)) {
+            webrtcFramesByUserRef.current[uid] = { ts: sampleMs, frames: framesDecoded };
+          }
           lastByUserRef.current[uid] = pickWebrtcSummaryForDisplay(prevU, data.summary);
+          appendWebrtcSeriesSample(sampleMs);
           webrtcDirtyRef.current = true;
         }
       };

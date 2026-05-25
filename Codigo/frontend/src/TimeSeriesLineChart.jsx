@@ -93,7 +93,8 @@ export default function TimeSeriesLineChart({
   unit = "",
   testWallStartMs = null,
   metricKind = null,
-  formatValue: formatValueProp
+  formatValue: formatValueProp,
+  unavailableMessage = ""
 }) {
   const fmt = useCallback(
     (v) => (formatValueProp ? formatValueProp(v) : defaultFormatValue(v, unit)),
@@ -103,14 +104,15 @@ export default function TimeSeriesLineChart({
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null);
   const gradId = useId().replace(/:/g, "");
-  const W = 400;
-  const H = 132;
-  const padL = 44;
-  const padR = 10;
-  const padT = 28;
-  const padB = 26;
+  const W = 460;
+  const H = 178;
+  const padL = 72;
+  const padR = 16;
+  const padT = 30;
+  const padB = 52;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
+  const yAxisTitle = `${label}${unit ? ` (${unit})` : ""}`;
 
   const aligned = useMemo(() => {
     const n = values.length;
@@ -172,11 +174,11 @@ export default function TimeSeriesLineChart({
 
   const onLeave = () => setHover(null);
 
-  if (!values.length) {
+  if (unavailableMessage || !values.length) {
     return (
-      <div className="chart-placeholder">
+      <div className={`chart-placeholder ${unavailableMessage ? "chart-placeholder--unavailable" : ""}`}>
         <span>{label}</span>
-        <p className="muted-small">Aguardando eventos…</p>
+        <p className="muted-small">{unavailableMessage || "Aguardando eventos…"}</p>
       </div>
     );
   }
@@ -255,9 +257,9 @@ export default function TimeSeriesLineChart({
             <text
               key={i}
               x={x}
-              y={H - 4}
+              y={H - 28}
               fill="#94a3b8"
-              fontSize="9"
+              fontSize="11"
               textAnchor="middle"
               style={{ userSelect: "none" }}
             >
@@ -265,6 +267,29 @@ export default function TimeSeriesLineChart({
             </text>
           );
         })}
+        <text
+          x={padL + innerW / 2}
+          y={H - 8}
+          fill="#cbd5e1"
+          fontSize="12"
+          fontWeight="600"
+          textAnchor="middle"
+          style={{ userSelect: "none" }}
+        >
+          Tempo (relógio e tempo no teste)
+        </text>
+        <text
+          x={18}
+          y={padT + innerH / 2}
+          fill="#cbd5e1"
+          fontSize="12"
+          fontWeight="600"
+          textAnchor="middle"
+          transform={`rotate(-90 18 ${padT + innerH / 2})`}
+          style={{ userSelect: "none" }}
+        >
+          {yAxisTitle}
+        </text>
         {/* Y tick labels (left) */}
         {yTicks
           .filter((_, j) => j % 2 === 0)
@@ -277,7 +302,7 @@ export default function TimeSeriesLineChart({
                 x={padL - 4}
                 y={y + 3}
                 fill="#94a3b8"
-                fontSize="9"
+                fontSize="11"
                 textAnchor="end"
                 style={{ userSelect: "none" }}
               >
@@ -300,10 +325,6 @@ export default function TimeSeriesLineChart({
           </g>
         )}
       </svg>
-      <p className="chart-axis-legend" aria-hidden="true">
-        Eixo X: tempo (relógio e tempo no teste) · Eixo Y: {label}
-        {unit ? ` (${unit})` : ""}
-      </p>
       {hp && (
         <div
           className="chart-floating-tooltip"

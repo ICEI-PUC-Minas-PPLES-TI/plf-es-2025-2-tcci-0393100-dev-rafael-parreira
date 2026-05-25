@@ -74,6 +74,9 @@ const jitsiHostButtonContains = (process.env.JITSI_HOST_BUTTON_CONTAINS || "").t
  * a conferência e os RTCPeerConnection só existem *depois* de o Meet voltar à sala.
  */
 const jitsiPostHostAuthDelayMs = Math.max(0, Number.parseInt(process.env.JITSI_POST_HOST_AUTH_DELAY_MS || "5000", 10) || 5000);
+const zoomDisplayName = (process.env.ZOOM_DISPLAY_NAME || "Stream Sentry Bot").trim();
+const zoomPasscode = (process.env.ZOOM_PASSCODE || "").trim();
+const zoomUseAccessTokenAsPasscode = process.env.ZOOM_USE_ACCESS_TOKEN_AS_PASSCODE === "1";
 
 /**
  * Clicar em «Eu sou o anfitrião» abre o Google; sem completar o login ficas bloqueado.
@@ -870,6 +873,34 @@ function isJitsiHost(urlStr) {
   }
 }
 
+function isZoomHost(urlStr) {
+  try {
+    const h = new URL(urlStr).hostname.toLowerCase();
+    return h === "zoom.us" || h.endsWith(".zoom.us") || h === "zoom.com" || h.endsWith(".zoom.com");
+  } catch {
+    return false;
+  }
+}
+
+function isMultiPageRtcHost(urlStr) {
+  return isJitsiHost(urlStr) || isZoomHost(urlStr);
+}
+
+function normalizeZoomJoinUrl(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    if (!isZoomHost(urlStr)) return urlStr;
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts[0] === "j" && parts[1]) {
+      u.pathname = `/wc/join/${parts[1]}`;
+      return u.toString();
+    }
+    return urlStr;
+  } catch {
+    return urlStr;
+  }
+}
+
 async function tryInPageEmailPasswordForm(page, email, password) {
   try {
     const emailField =
@@ -1288,6 +1319,130 @@ async function tryJitsiEnterConference(page) {
   return false;
 }
 
+async function tryZoomEnterConference(page, userId) {
+  const passcode = zoomPasscode || (zoomUseAccessTokenAsPasscode ? accessToken : "");
+  const emitZoomState = async (label) => {
+    const state = await page
+      .evaluate(() => {
+        const buttons = [...document.querySelectorAll("button, a, [role='button'], input[type='submit']")]
+          .map((el) => (el.innerText || el.textContent || el.value || el.getAttribute("aria-label") || "").trim())
+          .filter(Boolean)
+          .slice(0, 12);
+        const text = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 500);
+        return { title: document.title, url: location.href, buttons, text };
+      })
+      .catch((e) => ({ error: String(e?.message || e).slice(0, 180) }));
+    emit({ type: "telemetry", event: "zoom_join_state", userId, label, state });
+  };
+
+  await emitZoomState("initial");
+  for (let attempt = 0; attempt < 70; attempt++) {
+    if (attempt > 0 && attempt % 10 === 0) {
+      await emitZoomState(`attempt-${attempt}`);
+    }
+    const action = await page
+      .evaluate(
+        ({ displayName, passcode }) => {
+          const clickIfVisible = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none") return false;
+            if (r.width < 2 || r.height < 2) return false;
+            el.scrollIntoView({ block: "center", inline: "center" });
+            el.click();
+            return true;
+          };
+
+          const typeIfEmpty = (el, value) => {
+            if (!el || !value) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) return false;
+            if (String(el.value || "").trim()) return false;
+            el.focus();
+            el.value = value;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return true;
+          };
+
+          const selectors = [
+            "#onetrust-accept-btn-handler",
+            "button#onetrust-accept-btn-handler",
+            'button[aria-label*="Accept" i]',
+            'button[aria-label*="Aceitar" i]',
+            'a[href*="/wc/join/"]',
+            'a[href*="/wc/"][href*="/join"]',
+            'a[href*="join-from-browser"]',
+            'button[aria-label*="Join from" i]',
+            'button[aria-label*="Entrar pelo navegador" i]',
+            'button[aria-label*="I agree" i]',
+            'button[aria-label*="Agree" i]',
+            'button[aria-label*="Aceito" i]',
+            'button[aria-label*="Concordo" i]',
+            'button[aria-label*="Continue" i]',
+            'button[aria-label*="Continuar" i]',
+            'button[aria-label*="Join Audio" i]',
+            'button[aria-label*="Join with Computer Audio" i]',
+            'button[aria-label*="Join without Video" i]',
+            'button[aria-label*="Join with Video" i]'
+          ];
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (clickIfVisible(el)) return `selector:${sel}`;
+          }
+
+          const inputs = [...document.querySelectorAll("input")];
+          for (const input of inputs) {
+            const hay = `${input.name || ""} ${input.id || ""} ${input.placeholder || ""} ${input.getAttribute("aria-label") || ""}`.toLowerCase();
+            if (/\b(name|nome|display)\b/.test(hay)) {
+              if (typeIfEmpty(input, displayName)) return "filled-name";
+            }
+            if (/\b(passcode|password|senha|code|código|codigo)\b/.test(hay)) {
+              if (typeIfEmpty(input, passcode)) return "filled-passcode";
+            }
+          }
+
+          const candidates = [...document.querySelectorAll("button, a, [role='button'], input[type='submit']")];
+          for (const el of candidates) {
+            const text = (el.innerText || el.textContent || el.value || "").trim();
+            const hay = `${text} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""}`.toLowerCase();
+            if (
+              /(join from (your )?browser|join meeting|join|enter|continue|i agree|agree|join audio|computer audio|join without video|join with video|entrar pelo navegador|ingressar pelo navegador|entrar|participar|continuar|aceito|concordo|áudio do computador|audio do computador)/.test(
+                hay
+              ) &&
+              !/(leave|sair|cancel|cancelar|sign in|login|log in)/.test(hay) &&
+              text.length < 120
+            ) {
+              if (clickIfVisible(el)) return `text:${text.slice(0, 60)}`;
+            }
+          }
+
+          return "";
+        },
+        { displayName: zoomDisplayName, passcode }
+      )
+      .catch((e) => `error:${String(e?.message || e).slice(0, 120)}`);
+
+    if (action) {
+      emit({ type: "telemetry", event: "zoom_join_step", userId, action });
+      await delay(1300);
+      if (action.startsWith("text:") || action.includes("join") || action === "filled-passcode") {
+        await delay(2200);
+      }
+      continue;
+    }
+
+    if (attempt % 8 === 7) {
+      await page.keyboard.press("Enter").catch(() => {});
+      await delay(300);
+    }
+    await delay(600);
+  }
+  await emitZoomState("final");
+  return true;
+}
+
 function emptyWebRtcSummary() {
   return {
     peerConnections: 0,
@@ -1448,8 +1603,46 @@ async function collectStatsFromSingleFrame(frame) {
           nominated: false
         },
         remoteInbound: { audioRoundTripTimeMs: null, videoRoundTripTimeMs: null },
-        transport: { bytesSent: 0, bytesReceived: 0, dtlsState: null }
+        transport: { bytesSent: 0, bytesReceived: 0, dtlsState: null },
+        statsDebug: { peerConnections: pcs.length, types: {}, samples: [] }
       };
+
+      function collectVideoElementFallback() {
+        try {
+          const videos = [...document.querySelectorAll("video")].filter((v) => {
+            const r = v.getBoundingClientRect();
+            return (v.videoWidth || v.videoHeight || r.width || r.height) && !v.paused;
+          });
+          for (const v of videos) {
+            let totalFrames = 0;
+            let droppedFrames = 0;
+            try {
+              const q = typeof v.getVideoPlaybackQuality === "function" ? v.getVideoPlaybackQuality() : null;
+              totalFrames = q?.totalVideoFrames || v.webkitDecodedFrameCount || 0;
+              droppedFrames = q?.droppedVideoFrames || v.webkitDroppedFrameCount || 0;
+            } catch {
+              totalFrames = v.webkitDecodedFrameCount || 0;
+              droppedFrames = v.webkitDroppedFrameCount || 0;
+            }
+            summary.inboundVideo.framesDecoded += totalFrames || 0;
+            summary.inboundVideo.framesDropped += droppedFrames || 0;
+            if (v.videoWidth) summary.inboundVideo.frameWidth = v.videoWidth;
+            if (v.videoHeight) summary.inboundVideo.frameHeight = v.videoHeight;
+          }
+          if (videos.length) {
+            summary.statsDebug.videoElements = videos.map((v) => ({
+              width: v.videoWidth || 0,
+              height: v.videoHeight || 0,
+              paused: Boolean(v.paused),
+              readyState: v.readyState
+            })).slice(0, 8);
+          }
+        } catch {
+          /* sem acesso ao DOM de vídeo */
+        }
+      }
+
+      collectVideoElementFallback();
 
     const rtts = [];
 
@@ -1462,21 +1655,61 @@ async function collectStatsFromSingleFrame(frame) {
         continue;
       }
 
+      const statKind = (s) => {
+        const raw = `${s.kind || ""} ${s.mediaType || ""} ${s.trackIdentifier || ""} ${s.id || ""}`.toLowerCase();
+        if (
+          raw.includes("video") ||
+          s.framesDecoded != null ||
+          s.framesReceived != null ||
+          s.framesRendered != null ||
+          s.framesEncoded != null ||
+          s.framesSent != null ||
+          s.frameWidth != null ||
+          s.frameHeight != null
+        ) {
+          return "video";
+        }
+        if (raw.includes("audio") || s.audioLevel != null || s.totalAudioEnergy != null) {
+          return "audio";
+        }
+        return "";
+      };
+
       report.forEach((s) => {
         const t = s.type;
-        if (t === "inbound-rtp" && s.kind === "audio") {
+        const k = statKind(s);
+        summary.statsDebug.types[t] = (summary.statsDebug.types[t] || 0) + 1;
+        if (
+          summary.statsDebug.samples.length < 12 &&
+          ["inbound-rtp", "outbound-rtp", "remote-inbound-rtp", "candidate-pair", "transport"].includes(t)
+        ) {
+          const interestingKeys = Object.keys(s)
+            .filter((key) =>
+              /kind|media|track|jitter|frame|packet|byte|round|bitrate|width|height|state|nominated|timestamp/i.test(key)
+            )
+            .slice(0, 18);
+          const sample = { type: t, kind: k || s.kind || s.mediaType || "", keys: interestingKeys };
+          for (const key of interestingKeys) {
+            const value = s[key];
+            if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
+              sample[key] = value;
+            }
+          }
+          summary.statsDebug.samples.push(sample);
+        }
+        if (t === "inbound-rtp" && k === "audio") {
           summary.inboundAudio.packetsReceived += s.packetsReceived || 0;
           summary.inboundAudio.packetsLost += s.packetsLost || 0;
           summary.inboundAudio.bytesReceived += s.bytesReceived || 0;
           if (s.jitter != null) summary.inboundAudio.jitter = s.jitter;
           if (s.audioLevel != null) summary.inboundAudio.audioLevel = s.audioLevel;
         }
-        if (t === "inbound-rtp" && s.kind === "video") {
+        if (t === "inbound-rtp" && k === "video") {
           summary.inboundVideo.packetsReceived += s.packetsReceived || 0;
           summary.inboundVideo.packetsLost += s.packetsLost || 0;
           summary.inboundVideo.bytesReceived += s.bytesReceived || 0;
           if (s.jitter != null) summary.inboundVideo.jitter = s.jitter;
-          summary.inboundVideo.framesDecoded += s.framesDecoded || 0;
+          summary.inboundVideo.framesDecoded += s.framesDecoded || s.framesReceived || s.framesRendered || 0;
           summary.inboundVideo.framesDropped += s.framesDropped || 0;
           if (s.frameWidth) summary.inboundVideo.frameWidth = s.frameWidth;
           if (s.frameHeight) summary.inboundVideo.frameHeight = s.frameHeight;
@@ -1484,14 +1717,14 @@ async function collectStatsFromSingleFrame(frame) {
           if (s.totalDecodeTime != null) summary.inboundVideo.totalDecodeTime = s.totalDecodeTime;
           if (s.qpSum != null) summary.inboundVideo.qpSum = s.qpSum;
         }
-        if (t === "outbound-rtp" && s.kind === "audio") {
+        if (t === "outbound-rtp" && k === "audio") {
           summary.outboundAudio.packetsSent += s.packetsSent || 0;
           summary.outboundAudio.bytesSent += s.bytesSent || 0;
         }
-        if (t === "outbound-rtp" && s.kind === "video") {
+        if (t === "outbound-rtp" && k === "video") {
           summary.outboundVideo.packetsSent += s.packetsSent || 0;
           summary.outboundVideo.bytesSent += s.bytesSent || 0;
-          summary.outboundVideo.framesEncoded += s.framesEncoded || 0;
+          summary.outboundVideo.framesEncoded += s.framesEncoded || s.framesSent || 0;
           if (s.framesPerSecond != null) summary.outboundVideo.framesPerSecond = s.framesPerSecond;
           if (s.qualityLimitationReason)
             summary.outboundVideo.qualityLimitationReason = s.qualityLimitationReason;
@@ -1509,8 +1742,8 @@ async function collectStatsFromSingleFrame(frame) {
         }
         if (t === "remote-inbound-rtp") {
           const rtt = s.roundTripTime != null ? s.roundTripTime * 1000 : null;
-          if (s.kind === "audio" && rtt != null) summary.remoteInbound.audioRoundTripTimeMs = rtt;
-          if (s.kind === "video" && rtt != null) summary.remoteInbound.videoRoundTripTimeMs = rtt;
+          if (k === "audio" && rtt != null) summary.remoteInbound.audioRoundTripTimeMs = rtt;
+          if (k === "video" && rtt != null) summary.remoteInbound.videoRoundTripTimeMs = rtt;
         }
         if (t === "transport") {
           summary.transport.bytesSent += s.bytesSent || 0;
@@ -1533,12 +1766,20 @@ async function collectStatsFromSingleFrame(frame) {
 
 function mergeWebRtcSummaries(parts) {
   const base = emptyWebRtcSummary();
+  base.statsDebug = { peerConnections: 0, types: {}, samples: [] };
   const rttList = [];
   const aobList = [];
 
   for (const s of parts) {
     if (!s) continue;
     base.peerConnections += s.peerConnections || 0;
+    base.statsDebug.peerConnections += s.statsDebug?.peerConnections || s.peerConnections || 0;
+    for (const [type, count] of Object.entries(s.statsDebug?.types || {})) {
+      base.statsDebug.types[type] = (base.statsDebug.types[type] || 0) + count;
+    }
+    for (const sample of s.statsDebug?.samples || []) {
+      if (base.statsDebug.samples.length < 16) base.statsDebug.samples.push(sample);
+    }
     base.inboundAudio.packetsReceived += s.inboundAudio?.packetsReceived || 0;
     base.inboundAudio.packetsLost += s.inboundAudio?.packetsLost || 0;
     base.inboundAudio.bytesReceived += s.inboundAudio?.bytesReceived || 0;
@@ -1667,7 +1908,7 @@ async function runVirtualUser(userId, opts = {}) {
   browser.on("targetcreated", (target) => {
     void (async () => {
       try {
-        if (isJitsiHost(apiUrl)) {
+        if (isMultiPageRtcHost(apiUrl)) {
           const p = await target.page();
           if (p?.setBypassCSP) await p.setBypassCSP(true).catch(() => {});
         }
@@ -1688,13 +1929,23 @@ async function runVirtualUser(userId, opts = {}) {
       userId
     });
     await page.setViewport({ width: 1280, height: 720 });
-    if (isJitsiHost(apiUrl) && page.setBypassCSP) {
+    if (isMultiPageRtcHost(apiUrl) && page.setBypassCSP) {
       await page.setBypassCSP(true).catch(() => {});
     }
 
     await attachRtcHookViaCDP(page);
 
     page.on("request", (request) => {
+      if (isZoomHost(apiUrl) && /recaptcha|captcha/i.test(request.url())) {
+        emit({
+          type: "telemetry",
+          event: "zoom_blocked",
+          userId,
+          reason: "captcha",
+          message:
+            "O web client público do Zoom carregou reCAPTCHA/CAPTCHA. A automação não consegue entrar na reunião sem intervenção humana."
+        });
+      }
       emit({
         type: "telemetry",
         event: "request",
@@ -1725,19 +1976,23 @@ async function runVirtualUser(userId, opts = {}) {
       });
     });
 
-    // Meet público não usa este header; enviá-lo em todos os pedidos pode estragar fluxos do Jitsi.
-    if (!isJitsiHost(apiUrl)) {
+    // Meet/Zoom públicos não usam este header; enviá-lo pode estragar fluxos de pré-sala/login.
+    if (!isMultiPageRtcHost(apiUrl)) {
       await page.setExtraHTTPHeaders({
         Authorization: `Bearer ${accessToken}`
       });
     }
 
-    await page.goto(apiUrl, {
+    const targetUrl = isZoomHost(apiUrl) ? normalizeZoomJoinUrl(apiUrl) : apiUrl;
+    if (targetUrl !== apiUrl) {
+      emit({ type: "telemetry", event: "zoom_url_normalized", userId, url: targetUrl.slice(0, 800) });
+    }
+    await page.goto(targetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000
     });
 
-    await delay(isJitsiHost(apiUrl) ? 2500 : 1500);
+    await delay(isMultiPageRtcHost(apiUrl) ? 2500 : 1500);
 
     if (isJitsiHost(apiUrl)) {
       if (jitsiDebugLoginUI) {
@@ -1871,6 +2126,28 @@ async function runVirtualUser(userId, opts = {}) {
       }
     }
 
+    if (isZoomHost(apiUrl)) {
+      emit({
+        type: "telemetry",
+        event: "zoom_join_mode",
+        userId,
+        message:
+          "Zoom detectado. A entrada automática é best-effort: links públicos podem exigir login, CAPTCHA ou confirmação humana; páginas com Zoom Meeting SDK tendem a funcionar melhor."
+      });
+      await tryZoomEnterConference(page, userId);
+      for (let wave = 0; wave < 7; wave++) {
+        await delay(2000);
+        await injectRtcHookEverywhere(browser);
+      }
+      emit({
+        type: "telemetry",
+        event: "zoom_hint",
+        userId,
+        message:
+          "Se PeerConnections=0, abra em PUPPETEER_HEADFUL=1 para conferir se o Zoom bloqueou automação/login. Para senha, use ?pwd= no link ou ZOOM_PASSCODE no .env."
+      });
+    }
+
     const tick = Math.max(1000, statsIntervalMs);
     let probeTicks = 0;
     /**
@@ -1894,7 +2171,7 @@ async function runVirtualUser(userId, opts = {}) {
       if (!statsTimerChain.active) return;
       webrtcStatsTickIndex += 1;
       const doInject =
-        isJitsiHost(apiUrl) && webrtcStatsTickIndex % webrtcInjectEveryNTicks === 0;
+        isMultiPageRtcHost(apiUrl) && webrtcStatsTickIndex % webrtcInjectEveryNTicks === 0;
       let summary = emptyWebRtcSummary();
       let statsNote = "";
       try {
@@ -1906,7 +2183,7 @@ async function runVirtualUser(userId, opts = {}) {
           }
         }
         try {
-          if (isJitsiHost(apiUrl)) {
+          if (isMultiPageRtcHost(apiUrl)) {
             summary = (await collectWebRTCSummaryFromBrowser(browser)) || emptyWebRtcSummary();
           } else {
             summary = (await collectWebRTCSummary(page)) || emptyWebRtcSummary();
@@ -1924,7 +2201,16 @@ async function runVirtualUser(userId, opts = {}) {
         summary,
         ...(statsNote.trim() ? { statsNote: statsNote.trim().slice(0, 500) } : {})
       });
-      if (isJitsiHost(apiUrl) && probeTicks < 8 && (summary?.peerConnections || 0) === 0) {
+      if (isZoomHost(apiUrl) && (webrtcStatsTickIndex <= 6 || webrtcStatsTickIndex % 10 === 0)) {
+        emit({
+          type: "telemetry",
+          event: "zoom_stats_debug",
+          userId,
+          tick: webrtcStatsTickIndex,
+          debug: summary?.statsDebug || null
+        });
+      }
+      if (isMultiPageRtcHost(apiUrl) && probeTicks < 8 && (summary?.peerConnections || 0) === 0) {
         probeTicks += 1;
         try {
           const probe = await probeWebRtcBrowser(browser);
@@ -1981,8 +2267,8 @@ async function runVirtualUser(userId, opts = {}) {
       }
     };
 
-    const jitsiMinDwell = 28000;
-    const stay = Math.max(2000, isJitsiHost(apiUrl) ? Math.max(dwellMs, jitsiMinDwell) : dwellMs);
+    const rtcMeetMinDwell = 28000;
+    const stay = Math.max(2000, isMultiPageRtcHost(apiUrl) ? Math.max(dwellMs, rtcMeetMinDwell) : dwellMs);
     await dwellWithControls(stay, { signal, getControl });
 
     emit({

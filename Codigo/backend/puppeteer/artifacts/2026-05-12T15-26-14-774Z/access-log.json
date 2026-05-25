@@ -1,0 +1,900 @@
+{
+  "executedAt": "2026-05-12T15:26:16.517Z",
+  "target": "https://meet.jit.si/NomeDaSuaSala",
+  "virtualUsers": 10,
+  "requestEvents": [
+    {
+      "timestamp": "2026-05-12T15:26:15.284Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/NomeDaSuaSala",
+      "resourceType": "document"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.465Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/css/all.css?v=9193.6270",
+      "resourceType": "stylesheet"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.465Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/lib-jitsi-meet.min.js?v=9193.6270",
+      "resourceType": "script"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.465Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/app.bundle.min.js?v=9193.6270",
+      "resourceType": "script"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.510Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/manifest.json",
+      "resourceType": "manifest"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.012Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/olm.wasm",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.012Z",
+      "method": "GET",
+      "url": "data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAACyAgCdASoCAAIALmk0mk0iIiIiIgBoSygABc6WWgAA/veff/0PP8bA//LwYAAA",
+      "resourceType": "image"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/main-pt-BR.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/languages.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/countries-pt-BR.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/translation-languages.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/main-pt.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.014Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/languages.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.015Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/countries-pt.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.015Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/translation-languages.json",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.136Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/chunks/4690.min.js",
+      "resourceType": "script"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.151Z",
+      "method": "GET",
+      "url": "chrome-extension://invalid/",
+      "resourceType": "image"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.151Z",
+      "method": "GET",
+      "url": "https://sr-client-cfg.amplitude.com/config?api_key=fafdba4c3b47fe5f151060ca37f02d2f&config_keys=analyticsSDK",
+      "resourceType": "fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.152Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/images/favicon.svg?v=1",
+      "resourceType": "other"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.153Z",
+      "method": "OPTIONS",
+      "url": "https://sr-client-cfg.amplitude.com/config?api_key=fafdba4c3b47fe5f151060ca37f02d2f&config_keys=analyticsSDK",
+      "resourceType": "other"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.225Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/images/watermark.svg",
+      "resourceType": "image"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.232Z",
+      "method": "GET",
+      "url": "chrome-extension://invalid/",
+      "resourceType": "image"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.234Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/static/pwa/icons/icon192.png",
+      "resourceType": "other"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.350Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/incomingMessage.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.354Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/e2eeOff.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.354Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/e2eeOn.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.354Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/asked-unmute.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.354Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/joined.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.355Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/left.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.355Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/knock.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.357Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.358Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.359Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.360Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.360Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.360Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-raised-hand.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.360Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/liveStreamingOff.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.361Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/liveStreamingOn.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.361Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingOff.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.361Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingOn.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.361Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/transcriptionOff.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.362Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/transcriptionOn.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.362Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingAndTranscriptionOff.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.363Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingAndTranscriptionOn.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.363Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/rejected.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.363Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/rejected.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.364Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/outgoingRinging.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.364Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/outgoingStart.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.365Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/talkWhileMuted.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.366Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/noisyAudioInput.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.366Z",
+      "method": "GET",
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/noAudioSignal.mp3",
+      "resourceType": "media"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.435Z",
+      "method": "GET",
+      "url": "chrome-extension://invalid/",
+      "resourceType": "image"
+    }
+  ],
+  "responseEvents": [
+    {
+      "timestamp": "2026-05-12T15:26:15.457Z",
+      "status": 200,
+      "url": "https://meet.jit.si/NomeDaSuaSala"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.488Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/css/all.css?v=9193.6270"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.618Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/lib-jitsi-meet.min.js?v=9193.6270"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.714Z",
+      "status": 200,
+      "url": "https://meet.jit.si/manifest.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:15.763Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/app.bundle.min.js?v=9193.6270"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.012Z",
+      "status": 200,
+      "url": "data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAACyAgCdASoCAAIALmk0mk0iIiIiIgBoSygABc6WWgAA/veff/0PP8bA//LwYAAA"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.154Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/olm.wasm"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.155Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/main-pt-BR.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.155Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/countries-pt-BR.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.155Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/languages.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.155Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/translation-languages.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.155Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/main-pt.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.156Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/countries-pt.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.156Z",
+      "status": 304,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/languages.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.156Z",
+      "status": 304,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/lang/translation-languages.json"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.233Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/images/watermark.svg"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.352Z",
+      "status": 200,
+      "url": "https://meet.jit.si/static/pwa/icons/icon192.png"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.368Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/images/favicon.svg?v=1"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.370Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/libs/chunks/4690.min.js"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.431Z",
+      "status": 200,
+      "url": "https://sr-client-cfg.amplitude.com/config?api_key=fafdba4c3b47fe5f151060ca37f02d2f&config_keys=analyticsSDK"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.435Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/incomingMessage.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.436Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/e2eeOff.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.436Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/joined.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.438Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/e2eeOn.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.439Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/knock.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.443Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/left.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.444Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/asked-unmute.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.445Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.445Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.446Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.446Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.447Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.447Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.447Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-raised-hand.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.448Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.449Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/liveStreamingOff.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.449Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/liveStreamingOn.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.450Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingOn.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.450Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/transcriptionOn.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.450Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/transcriptionOff.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.451Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingOff.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.451Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingAndTranscriptionOn.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.451Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/recordingAndTranscriptionOff.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.452Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/talkWhileMuted.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.452Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/rejected.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.452Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/noAudioSignal.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.453Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/noisyAudioInput.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.453Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/outgoingRinging.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.453Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/outgoingStart.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.453Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.454Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.454Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.460Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.461Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.461Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.462Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.462Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/rejected.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.463Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-thumbs-up.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.464Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-applause.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.464Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-laughter.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.467Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-crickets.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.470Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-boo.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.470Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-surprise.mp3"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.471Z",
+      "status": 200,
+      "url": "https://meet.jit.si/v1/_cdn/meetjitsi_9193.6270/sounds/reactions-love.mp3"
+    }
+  ],
+  "failureEvents": [
+    {
+      "timestamp": "2026-05-12T15:26:16.151Z",
+      "url": "chrome-extension://invalid/",
+      "method": "GET",
+      "errorText": "net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.233Z",
+      "url": "chrome-extension://invalid/",
+      "method": "GET",
+      "errorText": "net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.436Z",
+      "url": "chrome-extension://invalid/",
+      "method": "GET",
+      "errorText": "net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.454Z",
+      "url": "https://sr-client-cfg.amplitude.com/config?api_key=fafdba4c3b47fe5f151060ca37f02d2f&config_keys=analyticsSDK",
+      "method": "GET",
+      "errorText": "net::ERR_FAILED"
+    }
+  ],
+  "browserConsole": [
+    {
+      "timestamp": "2026-05-12T15:26:15.510Z",
+      "type": "log",
+      "text": "(TIME) index.html loaded:\t 228.0999999642372"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.017Z",
+      "type": "log",
+      "text": "2026-05-12T15:26:16.017Z [LOG] [app:index.web] <HTMLDocument.<anonymous>>:  (TIME) document ready:\t 735.1999999880791"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.019Z",
+      "type": "log",
+      "text": "(TIME) window loaded event:\t 735.8999999761581"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.059Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.058Z [INFO] [app:redux] <Object.persistState>:  redux state persisted. 99914b932bd37a50b983c5e7c90ae93b -> 7abc58b48307e2906b17aa5e1c2ea1c1"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.071Z",
+      "type": "debug",
+      "text": "2026-05-12T15:26:16.070Z [DEBUG] [ui:VideoLayout] <Object.updateLargeVideo>:  Ignoring large video update with user id local: large video not initialized yet!"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.080Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.079Z [INFO] [core:JitsiMeetJS] <Object.init>:  This appears to be Chrome Headless, ver: 146.0.0.0"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.081Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.081Z [INFO] [stats:LocalStatsCollector] <$n.connectAudioContext>:  Connecting audio context"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.129Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.128Z [INFO] [rtc:RTCUtils] <ns.init>:  Stereo: false"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.130Z",
+      "type": "debug",
+      "text": "2026-05-12T15:26:16.129Z [DEBUG] [connectivity:NetworkInfo] <ns.updateNetworkInfo>:  updateNetworkInfo [object Object]"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.130Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.130Z [INFO] [app:lib-jitsi-meet] lib-jitsi-meet version: 363f750d"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.131Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.131Z [INFO] [app:lib-jitsi-meet] User Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.136Z",
+      "type": "log",
+      "text": "2026-05-12T15:26:16.135Z [LOG] [app:media] Start muted: "
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.138Z",
+      "type": "warn",
+      "text": "2026-05-12T15:26:16.137Z [WARN] [app:web-hid] <rz.sendDeviceReport>:  There are currently non-compliant conditions"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.140Z",
+      "type": "log",
+      "text": "2026-05-12T15:26:16.140Z [LOG] [app:media] Start audio only set to false"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.143Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.142Z [INFO] [app:analytics] Initialized 1 analytics handlers"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.152Z",
+      "type": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.202Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.202Z [INFO] [app:chrome-banner] <$6.componentDidUpdate>:  Chrome extension URL found."
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.203Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.202Z [INFO] [app:chrome-banner] <$6.componentDidUpdate>:  Chrome extension(s) info found."
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.225Z",
+      "type": "debug",
+      "text": "2026-05-12T15:26:16.225Z [DEBUG] [app:conference] (TIME) init action dispatched: 942.8999999761581"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.233Z",
+      "type": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.374Z",
+      "type": "log",
+      "text": "Service worker registered. [object ServiceWorkerRegistration]"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.436Z",
+      "type": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.454Z",
+      "type": "error",
+      "text": "Access to fetch at 'https://sr-client-cfg.amplitude.com/config?api_key=fafdba4c3b47fe5f151060ca37f02d2f&config_keys=analyticsSDK' from origin 'https://meet.jit.si' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.455Z",
+      "type": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.455Z",
+      "type": "error",
+      "text": "Amplitude Logger [Error]: Failed to fetch remote configuration because of error:  Error: Failed to fetch"
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.455Z",
+      "type": "warn",
+      "text": "Amplitude Logger [Warn]: Plugin name is undefined. \n      Generating a random UUID for plugin name: 1e146455-d733-4a8f-9c89-9f0a2f5c5a50. \n      Set a name for the plugin to prevent it from being added multiple times."
+    },
+    {
+      "timestamp": "2026-05-12T15:26:16.460Z",
+      "type": "info",
+      "text": "2026-05-12T15:26:16.459Z [INFO] [app:analytics] Amplitude initialized"
+    }
+  ]
+}

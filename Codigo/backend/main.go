@@ -54,6 +54,9 @@ type authServer struct {
 	testMu         sync.Mutex
 	testRunning    bool
 	testCancel     context.CancelFunc // cancela o contexto do exec do audit (finalizar teste)
+	testSessionID  string
+	testStartedAt  time.Time
+	testUsers      int
 	usersStorePath string
 	persistToDisk  bool
 }
@@ -205,6 +208,7 @@ func main() {
 	mux.HandleFunc("GET /auth/me", server.handleMe)
 	mux.HandleFunc("POST /puppeteer/smoke", server.handlePuppeteerSmoke)
 	mux.HandleFunc("POST /test/start", server.handleTestStart)
+	mux.HandleFunc("GET /test/status", server.handleTestStatus)
 	mux.HandleFunc("POST /test/stop", server.handleTestStop)
 	mux.HandleFunc("POST /test/control", server.handleTestControl)
 	mux.HandleFunc("POST /test/pause", server.handleTestPause)
@@ -492,6 +496,7 @@ func (s *authServer) handleWSTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.replayActiveTelemetry(conn)
 	globalHub.register(conn)
 	defer globalHub.unregister(conn)
 
@@ -500,6 +505,51 @@ func (s *authServer) handleWSTelemetry(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+}
+
+func (s *authServer) replayActiveTelemetry(conn *websocket.Conn) {
+	s.testMu.Lock()
+	running := s.testRunning
+	sessionID := s.testSessionID
+	startedAt := s.testStartedAt
+	users := s.testUsers
+	s.testMu.Unlock()
+
+	if !running || sessionID == "" {
+		return
+	}
+
+	replayedStart := false
+	if events, err := loadNDJSONEventLines(sessionTelemetryNDJSONPath(sessionID)); err == nil {
+		for _, raw := range events {
+			var msg map[string]any
+			if !replayedStart && json.Unmarshal(raw, &msg) == nil && msg["event"] == "test_start" {
+				replayedStart = true
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+				return
+			}
+		}
+	}
+
+	if replayedStart {
+		return
+	}
+
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	msg, _ := json.Marshal(map[string]any{
+		"type":         "telemetry",
+		"event":        "test_start",
+		"sessionId":    sessionID,
+		"startedAtISO": startedAt.UTC().Format(time.RFC3339Nano),
+		"elapsedSec":   time.Since(startedAt).Seconds(),
+		"virtualUsers": users,
+		"replayed":     true,
+		"ts":           time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	_ = conn.WriteMessage(websocket.TextMessage, msg)
 }
 
 func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
@@ -526,15 +576,6 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.testMu.Lock()
-	if s.testRunning {
-		s.testMu.Unlock()
-		writeJSON(w, http.StatusConflict, map[string]string{"message": "a test is already running"})
-		return
-	}
-	s.testRunning = true
-	s.testMu.Unlock()
-
 	apiURL := strings.TrimSpace(payload.APIURL)
 	token := strings.TrimSpace(payload.AccessToken)
 	users := payload.VirtualUsers
@@ -543,17 +584,70 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 	if payload.Chaos != nil && strings.TrimSpace(payload.Chaos.Profile) != "" {
 		cp.Profile = strings.TrimSpace(payload.Chaos.Profile)
 	}
+	sessionID := newSessionID()
+	startedAt := time.Now()
+
+	s.testMu.Lock()
+	if s.testRunning {
+		s.testMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "a test is already running"})
+		return
+	}
+	s.testRunning = true
+	s.testSessionID = sessionID
+	s.testStartedAt = startedAt
+	s.testUsers = users
+	s.testMu.Unlock()
+
 	if err := writeInitialAuditControl(users, cp); err != nil {
 		log.Printf("aviso: escrever control.json: %v", err)
 	}
 
-	sessionID := newSessionID()
-	go s.runAuditTest(apiURL, token, users, sessionID)
+	go s.runAuditTest(apiURL, token, users, sessionID, startedAt)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"message":   "test started; connect to WebSocket /ws/telemetry for live audit",
 		"sessionId": sessionID,
 	})
+}
+
+func (s *authServer) handleTestStatus(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
+		return
+	}
+
+	s.testMu.Lock()
+	running := s.testRunning
+	sessionID := s.testSessionID
+	startedAt := s.testStartedAt
+	users := s.testUsers
+	canStop := s.testCancel != nil
+	s.testMu.Unlock()
+
+	body := map[string]any{
+		"running": running,
+		"canStop": canStop,
+	}
+	if running {
+		body["sessionId"] = sessionID
+		body["virtualUsers"] = users
+		if !startedAt.IsZero() {
+			body["startedAt"] = startedAt.UTC().Format(time.RFC3339Nano)
+			body["elapsedSec"] = time.Since(startedAt).Seconds()
+		}
+		if ctrl, err := readAuditControl(); err == nil {
+			body["paused"] = ctrl.Paused
+			body["targetVirtualUsers"] = ctrl.TargetVirtualUsers
+			profile := strings.TrimSpace(ctrl.Chaos.Profile)
+			if profile == "" {
+				profile = "off"
+			}
+			body["chaosProfile"] = profile
+		}
+	}
+
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *authServer) handleTestStop(w http.ResponseWriter, r *http.Request) {
@@ -585,7 +679,7 @@ func (s *authServer) handleTestStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "teste em encerramento"})
 }
 
-func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int, sessionID string) {
+func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int, sessionID string, startedAt time.Time) {
 	ctx, cancel := context.WithCancel(context.Background())
 	timer := time.AfterFunc(25*time.Minute, func() { cancel() })
 
@@ -593,14 +687,15 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 	s.testCancel = cancel
 	s.testMu.Unlock()
 
-	startedAt := time.Now()
-
 	defer func() {
 		timer.Stop()
 		cancel()
 		s.testMu.Lock()
 		s.testRunning = false
 		s.testCancel = nil
+		s.testSessionID = ""
+		s.testStartedAt = time.Time{}
+		s.testUsers = 0
 		s.testMu.Unlock()
 	}()
 

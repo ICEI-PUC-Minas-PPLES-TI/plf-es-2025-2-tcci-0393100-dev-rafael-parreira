@@ -69,35 +69,116 @@ function StatusBars({ counts }) {
   );
 }
 
-function WebRTCKpis({ agg }) {
+const UNAVAILABLE_LABEL = "Indisponível neste alvo";
+const UNAVAILABLE_INFO =
+  "Esta métrica depende de estatísticas RTP/vídeo que o alvo atual não expõe ao navegador. No Zoom web público, normalmente ficam disponíveis apenas RTT e bytes de transporte.";
+
+function WebRTCKpis({ agg, mediaStatsUnavailable }) {
   const lossRate =
     agg.packetsReceivedTotal > 0
       ? (100 * agg.packetsLostTotal) / (agg.packetsLostTotal + agg.packetsReceivedTotal)
       : null;
 
+  const maybeUnavailable = (value, info) => ({
+    value: mediaStatsUnavailable ? UNAVAILABLE_LABEL : value,
+    info: mediaStatsUnavailable ? `${info} ${UNAVAILABLE_INFO}` : info,
+    unavailable: mediaStatsUnavailable
+  });
+
   const items = [
-    { label: "RTT (par candidato / remoto)", value: fmtMs(agg.roundTripTimeMs) },
-    { label: "Jitter vídeo (RTP)", value: fmtMs(agg.jitterVideo != null ? agg.jitterVideo * 1000 : null) },
-    { label: "Jitter áudio (RTP)", value: fmtMs(agg.jitterAudio != null ? agg.jitterAudio * 1000 : null) },
-    { label: "Usuários com WebRTC ativo", value: String(agg.usersWithRtc) },
-    { label: "PeerConnections (soma)", value: String(agg.peerConnections) },
-    { label: "Pacotes perdidos / recebidos", value: `${agg.packetsLostTotal} / ${agg.packetsReceivedTotal}` },
-    { label: "Perda estimada", value: lossRate != null && Number.isFinite(lossRate) ? `${lossRate.toFixed(2)} %` : "—" },
-    { label: "Frames decodificados", value: String(agg.framesDecoded) },
-    { label: "Frames codificados (out)", value: String(agg.framesEncoded) },
-    { label: "FPS entrada (último sample)", value: fmtNum(agg.fpsIn, 1) },
-    { label: "FPS saída (último sample)", value: fmtNum(agg.fpsOut, 1) },
-    { label: "Resolução vídeo (último)", value: agg.resolution || "—" },
-    { label: "Bytes recebidos (RTP in)", value: fmtBytes(agg.inboundBytes) },
-    { label: "Bytes enviados (RTP out)", value: fmtBytes(agg.outboundBytes) },
-    { label: "Bitrate saída disponível (est.)", value: fmtKbps(agg.availableOutgoingBitrate) }
+    {
+      label: "RTT (par candidato / remoto)",
+      value: fmtMs(agg.roundTripTimeMs),
+      info: "Tempo de ida e volta dos pacotes WebRTC. Valores altos indicam latência percebida na chamada."
+    },
+    {
+      label: "Jitter vídeo (RTP)",
+      ...maybeUnavailable(
+        fmtMs(agg.jitterVideo != null ? agg.jitterVideo * 1000 : null),
+        "Variação no tempo de chegada dos pacotes de vídeo RTP. Quanto maior, mais instável tende a ficar o vídeo."
+      )
+    },
+    {
+      label: "Jitter áudio (RTP)",
+      ...maybeUnavailable(
+        fmtMs(agg.jitterAudio != null ? agg.jitterAudio * 1000 : null),
+        "Variação no tempo de chegada dos pacotes de áudio RTP. Pode causar cortes ou atraso perceptível no áudio."
+      )
+    },
+    {
+      label: "Usuários com WebRTC ativo",
+      value: String(agg.usersWithRtc),
+      info: "Quantidade de usuários virtuais que já apresentam tráfego ou métricas WebRTC relevantes."
+    },
+    {
+      label: "PeerConnections (soma)",
+      value: String(agg.peerConnections),
+      info: "Soma das RTCPeerConnections detectadas nos browsers do teste."
+    },
+    {
+      label: "Pacotes perdidos / recebidos",
+      ...maybeUnavailable(
+        `${agg.packetsLostTotal} / ${agg.packetsReceivedTotal}`,
+        "Total de pacotes RTP perdidos comparado aos pacotes recebidos durante as amostras."
+      )
+    },
+    {
+      label: "Perda estimada",
+      ...maybeUnavailable(
+        lossRate != null && Number.isFinite(lossRate) ? `${lossRate.toFixed(2)} %` : "—",
+        "Percentual estimado de perda de pacotes RTP. Perdas constantes afetam qualidade de áudio e vídeo."
+      )
+    },
+    {
+      label: "Frames decodificados",
+      ...maybeUnavailable(String(agg.framesDecoded), "Quantidade de frames de vídeo recebidos e decodificados pelo browser.")
+    },
+    {
+      label: "Frames codificados (out)",
+      ...maybeUnavailable(String(agg.framesEncoded), "Quantidade de frames de vídeo preparados para envio pelo browser.")
+    },
+    {
+      label: "FPS entrada (último sample)",
+      ...maybeUnavailable(fmtNum(agg.fpsIn, 1), "Frames por segundo do vídeo recebido no último conjunto de métricas.")
+    },
+    {
+      label: "FPS saída (último sample)",
+      ...maybeUnavailable(fmtNum(agg.fpsOut, 1), "Frames por segundo do vídeo enviado no último conjunto de métricas.")
+    },
+    {
+      label: "Resolução vídeo (último)",
+      ...maybeUnavailable(agg.resolution || "—", "Última resolução de vídeo observada nas estatísticas inbound.")
+    },
+    {
+      label: "Bytes recebidos (RTP in)",
+      value: fmtBytes(agg.inboundBytes),
+      info: "Volume total de dados RTP recebidos em áudio e vídeo."
+    },
+    {
+      label: "Bytes enviados (RTP out)",
+      value: fmtBytes(agg.outboundBytes),
+      info: "Volume total de dados RTP enviados em áudio e vídeo."
+    },
+    {
+      label: "Bitrate saída disponível (est.)",
+      value: fmtKbps(agg.availableOutgoingBitrate),
+      info: "Estimativa de banda disponível para envio reportada pelo par candidato WebRTC."
+    }
   ];
 
   return (
     <div className="webrtc-kpi-grid">
       {items.map((it) => (
-        <div key={it.label} className="webrtc-kpi">
-          <span className="webrtc-kpi-label">{it.label}</span>
+        <div key={it.label} className={`webrtc-kpi ${it.unavailable ? "webrtc-kpi--unavailable" : ""}`}>
+          <span className="webrtc-kpi-label">
+            {it.label}
+            <span className="info-dot" tabIndex={0} aria-label={`Informação: ${it.info}`}>
+              i
+              <span className="info-tooltip" role="tooltip">
+                {it.info}
+              </span>
+            </span>
+          </span>
           <span className="webrtc-kpi-value">{it.value}</span>
         </div>
       ))}
@@ -168,6 +249,18 @@ const CHAOS_QUICK = [
   { value: "flaky", label: "Instável" }
 ];
 
+function getAuditStatus({ connected, liveTestRunning, lastEvent, historical }) {
+  if (historical) return { label: "Concluído", tone: "done" };
+  if (lastEvent === "test_stopped") return { label: "Finalizando", tone: "stopping" };
+  if (lastEvent === "test_complete" || lastEvent === "server_audit_summary") return { label: "Concluído", tone: "done" };
+  if (!liveTestRunning) return { label: "Aguardando", tone: "idle" };
+  if (!connected) return { label: "Aguardando conexão", tone: "waiting" };
+  if (!lastEvent) return { label: "Aguardando eventos", tone: "waiting" };
+  if (lastEvent === "test_start") return { label: "Iniciando", tone: "starting" };
+  if (lastEvent === "error" || lastEvent === "user_error") return { label: "Atenção", tone: "warning" };
+  return { label: "Em execução", tone: "running" };
+}
+
 export default function AuditDashboard({
   connected,
   lastEvent,
@@ -183,7 +276,6 @@ export default function AuditDashboard({
   webrtcLastByUser,
   liveTestRunning,
   testElapsedSec,
-  elapsedSeries,
   activeSessionId,
   auditTargetUsers,
   auditChaos,
@@ -195,15 +287,62 @@ export default function AuditDashboard({
   controlBusy,
   onInjectChaos,
   seriesTimeMs = { cumulative: [], rps: [], elapsed: [], webrtc: {} },
-  testWallStartMs = null
+  testWallStartMs = null,
+  historical = false
 }) {
+  const auditStatus = getAuditStatus({ connected, liveTestRunning, lastEvent, historical });
+  const hasWebrtcConnection =
+    (webrtcAggregate?.peerConnections || 0) > 0 ||
+    (webrtcAggregate?.roundTripTimeMs != null && Number.isFinite(webrtcAggregate.roundTripTimeMs));
+  const userRows = Object.values(webrtcLastByUser || {});
+  const hasStatsDebugMedia = userRows.some((row) => {
+    const types = row?.statsDebug?.types || {};
+    return (
+      (types["inbound-rtp"] || 0) > 0 ||
+      (types["outbound-rtp"] || 0) > 0 ||
+      (types["remote-inbound-rtp"] || 0) > 0 ||
+      (row?.statsDebug?.videoElements || []).length > 0
+    );
+  });
+  const hasRtpMediaStats =
+    hasStatsDebugMedia ||
+    (webrtcAggregate?.packetsReceivedTotal || 0) > 0 ||
+    (webrtcAggregate?.packetsLostTotal || 0) > 0 ||
+    (webrtcAggregate?.framesDecoded || 0) > 0 ||
+    (webrtcAggregate?.framesEncoded || 0) > 0 ||
+    Boolean(webrtcAggregate?.resolution) ||
+    webrtcAggregate?.jitterVideo != null ||
+    webrtcAggregate?.jitterAudio != null ||
+    (webrtcAggregate?.fpsIn != null && webrtcAggregate.fpsIn > 0) ||
+    (webrtcAggregate?.fpsOut != null && webrtcAggregate.fpsOut > 0);
+  const mediaStatsUnavailable = hasWebrtcConnection && !hasRtpMediaStats;
+  const mediaUnavailableMessage =
+    "Indisponível neste alvo: a chamada expõe conexão e bytes, mas não expõe estatísticas RTP/vídeo ao navegador.";
+
   return (
     <div className="audit-dashboard">
       <div className="audit-header">
-        <h2>Auditoria em tempo real</h2>
+        <div className="audit-title-row">
+          <h2>{historical ? "Auditoria histórica" : "Auditoria em tempo real"}</h2>
+          <span className={`audit-status-pill audit-status-pill--${auditStatus.tone}`}>{auditStatus.label}</span>
+        </div>
         <p className="muted-small">
-          WebSocket: {connected ? <span className="ok">conectado</span> : <span className="warn">desconectado</span>}
-          {lastEvent ? ` · último evento: ${lastEvent}` : ""}
+          {historical ? (
+            <>
+              Sessão finalizada reconstruída a partir do log salvo
+              {activeSessionId ? (
+                <>
+                  {" "}
+                  · <code>{activeSessionId}</code>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>
+              WebSocket: {connected ? <span className="ok">conectado</span> : <span className="warn">desconectado</span>}
+              {lastEvent ? ` · último evento: ${lastEvent}` : ""}
+            </>
+          )}
         </p>
       </div>
 
@@ -279,20 +418,6 @@ export default function AuditDashboard({
         </div>
       )}
 
-      {elapsedSeries?.length > 0 && (
-        <div className="audit-charts elapsed-chart-row">
-          <TimeSeriesLineChart
-            values={elapsedSeries}
-            timeMs={seriesTimeMs.elapsed}
-            testWallStartMs={testWallStartMs}
-            label="Tempo decorrido do teste"
-            color="#94a3b8"
-            unit="s"
-            metricKind="elapsed"
-          />
-        </div>
-      )}
-
       <div className="audit-kpis">
         <div className="kpi">
           <span className="kpi-value">{requestTotal}</span>
@@ -308,16 +433,38 @@ export default function AuditDashboard({
         </div>
       </div>
 
+      <div className="audit-charts">
+        <TimeSeriesLineChart
+          values={cumulativeSeries}
+          timeMs={seriesTimeMs.cumulative}
+          testWallStartMs={testWallStartMs}
+          label="Requisições"
+          color="#22c55e"
+          unit="req"
+          metricKind="cumulative"
+        />
+        <TimeSeriesLineChart
+          values={rpsSeries}
+          timeMs={seriesTimeMs.rps}
+          testWallStartMs={testWallStartMs}
+          label="Atividade"
+          color="#38bdf8"
+          unit="evt/s"
+          metricKind="rps"
+        />
+      </div>
+
       <div className="audit-block webrtc-block">
         <h3>WebRTC</h3>
         <p className="muted-small webrtc-intro">
           O Puppeteer intercepta <code>RTCPeerConnection</code> e amostra <code>getStats()</code> a cada poucos segundos:
           RTP in/out, pares ICE, transporte, jitter, RTT e frames — alinhado ao que o internos do Chrome expõe.
         </p>
-        <WebRTCKpis agg={webrtcAggregate} />
+        <WebRTCKpis agg={webrtcAggregate} mediaStatsUnavailable={mediaStatsUnavailable} />
         <p className="muted-small webrtc-chart-note">
-          Os gráficos abaixo só desenham linhas com tráfego WebRTC (RTP, PeerConnections). As curvas de requisições HTTP estão
-          abaixo; tráfego 200/304 do Meet não significa sozinho que a chamada de vídeo subiu.
+          {mediaStatsUnavailable
+            ? "Este alvo expõe PeerConnections, RTT e bytes de transporte, mas não disponibiliza RTP/vídeo detalhado; por isso jitter, perda, frames e FPS ficam indisponíveis."
+            : "Os gráficos abaixo só desenham linhas com tráfego WebRTC (RTP, PeerConnections). As curvas de requisições HTTP estão abaixo; tráfego 200/304 do Meet não significa sozinho que a chamada de vídeo subiu."}
         </p>
         <div className="audit-charts webrtc-charts">
           <TimeSeriesLineChart
@@ -337,12 +484,13 @@ export default function AuditDashboard({
             color="#f472b6"
             unit="ms"
             metricKind="jitterVideo"
+            unavailableMessage={mediaStatsUnavailable ? mediaUnavailableMessage : ""}
           />
           <TimeSeriesLineChart
             values={webrtcSeries.downlinkKbps}
             timeMs={seriesTimeMs.webrtc?.downlinkKbps}
             testWallStartMs={testWallStartMs}
-            label="Taxa recebida (aprox.)"
+            label="Taxa recebida"
             color="#34d399"
             unit="kbps"
             metricKind="downlinkKbps"
@@ -355,31 +503,11 @@ export default function AuditDashboard({
             color="#fbbf24"
             unit="fps"
             metricKind="fpsIn"
+            unavailableMessage={mediaStatsUnavailable ? mediaUnavailableMessage : ""}
           />
         </div>
         <h4 className="webrtc-sub">Por usuário virtual</h4>
         <WebRTCByUserTable lastByUser={webrtcLastByUser} />
-      </div>
-
-      <div className="audit-charts">
-        <TimeSeriesLineChart
-          values={cumulativeSeries}
-          timeMs={seriesTimeMs.cumulative}
-          testWallStartMs={testWallStartMs}
-          label="Requisições acumuladas"
-          color="#22c55e"
-          unit="req"
-          metricKind="cumulative"
-        />
-        <TimeSeriesLineChart
-          values={rpsSeries}
-          timeMs={seriesTimeMs.rps}
-          testWallStartMs={testWallStartMs}
-          label="Atividade por segundo (aprox.)"
-          color="#38bdf8"
-          unit="evt/s"
-          metricKind="rps"
-        />
       </div>
 
       <div className="audit-block">

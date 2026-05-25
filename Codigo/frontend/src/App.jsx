@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import logo from "../Logo.svg";
 import AuditDashboard from "./AuditDashboard";
 import LandingPage from "./LandingPage";
-import { useTelemetryWS } from "./useTelemetryWS.js";
+import { buildTelemetrySnapshotFromEvents, useTelemetryWS } from "./useTelemetryWS.js";
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -123,7 +123,7 @@ export default function App() {
   const hasToken = Boolean(authToken);
   const [tab, setTab] = useState("login");
   const [screen, setScreen] = useState(hasToken ? "app" : "landing");
-  const [mainView, setMainView] = useState("settings");
+  const [mainView, setMainView] = useState("start");
   const [feedback, setFeedback] = useState("");
   const [feedbackType, setFeedbackType] = useState("");
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
@@ -133,6 +133,8 @@ export default function App() {
   const [testStarting, setTestStarting] = useState(false);
   const [testStopping, setTestStopping] = useState(false);
   const [liveTestRunning, setLiveTestRunning] = useState(false);
+  const [activeTestSessionId, setActiveTestSessionId] = useState("");
+  const [activeTestElapsedSec, setActiveTestElapsedSec] = useState(null);
   const [chaosProfile, setChaosProfile] = useState("off");
   const [auditTargetUsers, setAuditTargetUsers] = useState(1);
   const [auditChaos, setAuditChaos] = useState("off");
@@ -140,6 +142,8 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
+  const [historicalAudit, setHistoricalAudit] = useState(null);
+  const [historicalAuditLoading, setHistoricalAuditLoading] = useState(false);
 
   const [configForm, setConfigForm] = useState(() => {
     const savedConfig = localStorage.getItem("streamSentryTechConfig");
@@ -168,7 +172,7 @@ export default function App() {
     setAuthToken("");
     setScreen("auth");
     setTab("login");
-    setMainView("settings");
+    setMainView("start");
     setLiveTestRunning(false);
     setMessage(
       "Sessão expirada ou inválida. Entre de novo. Se o erro voltar, confirme no servidor o mesmo JWT_SECRET usado no login (ex.: variável de ambiente .env) e que o token não esteja desatualizado no navegador.",
@@ -176,10 +180,67 @@ export default function App() {
     );
   }
 
+  function markTestFinished() {
+    setLiveTestRunning(false);
+    setActiveTestSessionId("");
+    setActiveTestElapsedSec(null);
+  }
+
   const telemetry = useTelemetryWS(apiBaseUrl, authToken, screen === "app", {
-    onTestRunFinished: () => setLiveTestRunning(false),
+    onTestRunFinished: markTestFinished,
     onSessionInvalid: handleSessionInvalid
   });
+
+  function applyTestStatus(status, { announce = false } = {}) {
+    const running = Boolean(status?.running);
+    setLiveTestRunning(running);
+    if (!running) {
+      setActiveTestSessionId("");
+      setActiveTestElapsedSec(null);
+      return;
+    }
+
+    const users = Number(status.targetVirtualUsers ?? status.virtualUsers);
+    if (Number.isFinite(users) && users >= 1) {
+      setAuditTargetUsers(users);
+    }
+    const profile = status.chaosProfile || "off";
+    setAuditChaos(profile);
+    setChaosProfile(profile);
+    setActiveTestSessionId(status.sessionId || "");
+    setActiveTestElapsedSec(Number.isFinite(Number(status.elapsedSec)) ? Number(status.elapsedSec) : null);
+    setMainView("audit");
+    if (announce) {
+      setMessage("Teste em execução recuperado. Pode acompanhar e finalizar pela Auditoria.", "success");
+    }
+  }
+
+  async function syncTestStatus(options = {}) {
+    const status = await getWithAuth("/test/status", authToken);
+    applyTestStatus(status, options);
+    return status;
+  }
+
+  useEffect(() => {
+    if (screen !== "app" || !authToken) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await getWithAuth("/test/status", authToken);
+        if (!cancelled) applyTestStatus(status);
+      } catch (e) {
+        if (cancelled) return;
+        if (e.unauthorized) {
+          handleSessionInvalid();
+          return;
+        }
+        setMessage(e.message, "error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, authToken]);
 
   useEffect(() => {
     if (screen !== "app" || !authToken || mainView !== "history") return undefined;
@@ -214,7 +275,7 @@ export default function App() {
       setMessage("Cadastro realizado com sucesso.", "success");
       setRegisterForm({ name: "", email: "", password: "" });
       setScreen("app");
-      setMainView("settings");
+      setMainView("start");
     } catch (error) {
       setMessage(error.message, "error");
     }
@@ -229,7 +290,7 @@ export default function App() {
       setMessage(`Bem-vindo, ${result.user.name}.`, "success");
       setLoginForm({ email: "", password: "" });
       setScreen("app");
-      setMainView("settings");
+      setMainView("start");
     } catch (error) {
       setMessage(error.message, "error");
     }
@@ -269,19 +330,29 @@ export default function App() {
       const validated = validateConfig(configForm);
       setTestStarting(true);
       setMessage("Iniciando teste com Puppeteer…", "");
-      await postWithAuth(
+      const result = await postWithAuth(
         "/test/start",
         { ...validated, chaos: { profile: chaosProfile } },
         authToken
       );
       setAuditTargetUsers(validated.virtualUsers);
       setAuditChaos(chaosProfile);
+      setActiveTestSessionId(result.sessionId || "");
+      setActiveTestElapsedSec(0);
       setLiveTestRunning(true);
       setMessage("Teste iniciado. Veja a aba Auditoria para métricas ao vivo.", "success");
       setMainView("audit");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
+        return;
+      }
+      if (error.message.toLowerCase().includes("already running")) {
+        try {
+          await syncTestStatus({ announce: true });
+        } catch {
+          setMessage("Já existe um teste em execução, mas não foi possível recuperar o estado agora.", "error");
+        }
         return;
       }
       setMessage(error.message, "error");
@@ -401,12 +472,32 @@ export default function App() {
     }
   }
 
+  async function handleOpenHistoricalAudit(sessionId) {
+    try {
+      setHistoricalAuditLoading(true);
+      setMessage("A carregar auditoria histórica…", "");
+      const data = await getWithAuth(`/reports/session/${encodeURIComponent(sessionId)}`, authToken);
+      const snapshot = buildTelemetrySnapshotFromEvents(data.events || [], data.session || { id: sessionId });
+      setHistoricalAudit({ session: data.session || { id: sessionId }, snapshot });
+      setMainView("historicalAudit");
+      setMessage("Auditoria histórica carregada.", "success");
+    } catch (error) {
+      if (error.unauthorized) {
+        handleSessionInvalid();
+        return;
+      }
+      setMessage(error.message, "error");
+    } finally {
+      setHistoricalAuditLoading(false);
+    }
+  }
+
   async function handleStopTest(event) {
-    event.preventDefault();
+    event?.preventDefault();
     try {
       setTestStopping(true);
       await postWithAuth("/test/stop", {}, authToken);
-      setLiveTestRunning(false);
+      markTestFinished();
       setMessage("Teste a encerrar (Chromium e Puppeteer vão fechar).", "success");
     } catch (error) {
       if (error.unauthorized) {
@@ -425,7 +516,7 @@ export default function App() {
     setLiveTestRunning(false);
     setScreen("landing");
     setTab("login");
-    setMainView("settings");
+    setMainView("start");
     setMessage("Sessão encerrada.", "success");
   }
 
@@ -541,7 +632,7 @@ export default function App() {
         </section>
       ) : null}
       {screen === "app" ? (
-        <section className={`card card-app ${mainView === "audit" ? "card-app-audit" : ""}`}>
+        <section className={`card card-app ${mainView === "audit" || mainView === "historicalAudit" ? "card-app-audit" : ""}`}>
           <header className="site-header">
             <div className="site-header-top">
               <a href="#main-app" className="site-brand" onClick={(e) => e.preventDefault()}>
@@ -552,13 +643,6 @@ export default function App() {
                 </div>
               </a>
               <nav className="site-nav" aria-label="Navegação principal">
-                <button
-                  type="button"
-                  className={`nav-link ${mainView === "settings" ? "active" : ""}`}
-                  onClick={() => setMainView("settings")}
-                >
-                  Configurações
-                </button>
                 <button
                   type="button"
                   className={`nav-link ${mainView === "start" ? "active" : ""}`}
@@ -575,7 +659,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={`nav-link ${mainView === "history" ? "active" : ""}`}
+                  className={`nav-link ${mainView === "history" || mainView === "historicalAudit" ? "active" : ""}`}
                   onClick={() => setMainView("history")}
                 >
                   Histórico
@@ -600,9 +684,19 @@ export default function App() {
             </div>
           </header>
 
-          {mainView === "settings" && (
+          <p className={`feedback feedback-top ${feedbackType}`}>{feedback}</p>
+
+          {mainView === "start" && (
             <>
-              <p className="subtitle">Configuração técnica do Puppeteer</p>
+              <p className="config-intro">
+                Defina a URL alvo, o token Bearer enviado nas requisições e quantos usuários virtuais o Puppeteer irá
+                simular em lotes. Também pode usar salas WebRTC como Jitsi ou Zoom; nesses domínios públicos o runner não
+                injeta o header Authorization para não quebrar a pré-sala.
+              </p>
+              <p className="muted-small">
+                Zoom: prefira uma página sua com Zoom Meeting SDK. Links públicos <code>zoom.us/j/...</code> são tentados via
+                web client, mas podem pedir login, CAPTCHA ou confirmação manual.
+              </p>
               <div className="example-box">
                 <p>Exemplo rápido para testar:</p>
                 <code>URL: {sampleConfig.apiUrl}</code>
@@ -610,78 +704,6 @@ export default function App() {
                   Usar exemplo
                 </button>
               </div>
-              <form className="form" onSubmit={handleSaveConfig}>
-                <div className="config-block">
-                  <h2>API</h2>
-                  <label htmlFor="api-url">URL da API</label>
-                  <input
-                    id="api-url"
-                    type="url"
-                    value={configForm.apiUrl}
-                    onChange={(e) => setConfigForm({ ...configForm, apiUrl: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="config-block">
-                  <h2>Segurança</h2>
-                  <label htmlFor="access-token">Token de acesso</label>
-                  <input
-                    id="access-token"
-                    type="text"
-                    value={configForm.accessToken}
-                    onChange={(e) => setConfigForm({ ...configForm, accessToken: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="config-block">
-                  <h2>Puppeteer</h2>
-                  <label htmlFor="virtual-users">Usuários virtuais simultâneos (1 a 50)</label>
-                  <input
-                    id="virtual-users"
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={configForm.virtualUsers}
-                    onChange={(e) => setConfigForm({ ...configForm, virtualUsers: Number(e.target.value) })}
-                    required
-                  />
-                </div>
-                <div className="actions">
-                  <button className="submit" type="submit">
-                    Salvar
-                  </button>
-                  <button className="ghost" type="button" onClick={handlePuppeteerSmoke} disabled={puppeteerLoading}>
-                    {puppeteerLoading ? "Executando..." : "Testar Puppeteer"}
-                  </button>
-                </div>
-              </form>
-              {puppeteerResult && (
-                <div className="result-box">
-                  <h2>Resultado da integração</h2>
-                  <p>
-                    <strong>URL final:</strong> {puppeteerResult.finalUrl || "-"}
-                  </p>
-                  <p>
-                    <strong>Status HTTP:</strong> {String(puppeteerResult.statusCode ?? "-")}
-                  </p>
-                  <p>
-                    <strong>Título:</strong> {puppeteerResult.title || "-"}
-                  </p>
-                  <p>
-                    <strong>Executado em:</strong> {puppeteerResult.executedAt || "-"}
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-
-          {mainView === "start" && (
-            <>
-              <p className="subtitle">Iniciar teste (Puppeteer)</p>
-              <p className="config-intro">
-                Defina a URL da API alvo, o token Bearer enviado nas requisições e quantos usuários virtuais o Puppeteer
-                irá simular em lotes. O tráfego de rede aparece em tempo real na aba Auditoria via WebSocket.
-              </p>
               <form className="form" onSubmit={handleStartTest}>
                 <div className="config-block">
                   <h2>Alvo</h2>
@@ -741,6 +763,12 @@ export default function App() {
                   <button className="submit" type="submit" disabled={testStarting || testStopping}>
                     {testStarting ? "Iniciando…" : "Iniciar teste"}
                   </button>
+                  <button className="ghost" type="button" onClick={handleSaveConfig}>
+                    Salvar configurações
+                  </button>
+                  <button className="ghost" type="button" onClick={handlePuppeteerSmoke} disabled={puppeteerLoading}>
+                    {puppeteerLoading ? "Executando..." : "Testar Puppeteer"}
+                  </button>
                   <button
                     type="button"
                     className="ghost stop-test"
@@ -751,6 +779,23 @@ export default function App() {
                   </button>
                 </div>
               </form>
+              {puppeteerResult && (
+                <div className="result-box">
+                  <h2>Resultado da integração</h2>
+                  <p>
+                    <strong>URL final:</strong> {puppeteerResult.finalUrl || "-"}
+                  </p>
+                  <p>
+                    <strong>Status HTTP:</strong> {String(puppeteerResult.statusCode ?? "-")}
+                  </p>
+                  <p>
+                    <strong>Título:</strong> {puppeteerResult.title || "-"}
+                  </p>
+                  <p>
+                    <strong>Executado em:</strong> {puppeteerResult.executedAt || "-"}
+                  </p>
+                </div>
+              )}
             </>
           )}
 
@@ -804,7 +849,7 @@ export default function App() {
                         <th>HTTP req</th>
                         <th>WebRTC amostras</th>
                         <th>Estado</th>
-                        <th>Exportar</th>
+                        <th>Ações</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -833,6 +878,15 @@ export default function App() {
                             <td>{row.exitOk ? "OK" : "Erro"}</td>
                             <td className="history-actions-cell">
                               <div className="history-actions">
+                                <button
+                                  type="button"
+                                  className="submit btn-tiny"
+                                  disabled={historicalAuditLoading}
+                                  title="Abrir esta sessão usando a mesma tela de Auditoria"
+                                  onClick={() => handleOpenHistoricalAudit(row.id)}
+                                >
+                                  {historicalAuditLoading ? "Abrindo…" : "Ver auditoria"}
+                                </button>
                                 <button
                                   type="button"
                                   className="ghost btn-tiny"
@@ -878,9 +932,8 @@ export default function App() {
               webrtcSeries={telemetry.webrtcSeries}
               webrtcLastByUser={telemetry.webrtcLastByUser}
               liveTestRunning={liveTestRunning}
-              testElapsedSec={telemetry.testElapsedSec}
-              elapsedSeries={telemetry.elapsedSeries}
-              activeSessionId={telemetry.activeSessionId}
+              testElapsedSec={telemetry.testElapsedSec ?? activeTestElapsedSec}
+              activeSessionId={telemetry.activeSessionId || activeTestSessionId}
               auditTargetUsers={auditTargetUsers}
               auditChaos={auditChaos}
               onAuditTargetChange={setAuditTargetUsers}
@@ -895,7 +948,41 @@ export default function App() {
             />
           )}
 
-          <p className={`feedback ${feedbackType}`}>{feedback}</p>
+          {mainView === "historicalAudit" && historicalAudit?.snapshot && (
+            <>
+              <div className="history-audit-toolbar">
+                <button type="button" className="ghost" onClick={() => setMainView("history")}>
+                  ← Voltar ao histórico
+                </button>
+                <span className="muted-small">
+                  Visualizando sessão <code>{historicalAudit.session?.id || historicalAudit.snapshot.activeSessionId}</code>
+                </span>
+              </div>
+              <AuditDashboard
+                connected={false}
+                lastEvent={historicalAudit.snapshot.lastEvent}
+                requestTotal={historicalAudit.snapshot.requestTotal}
+                responseTotal={historicalAudit.snapshot.responseTotal}
+                failTotal={historicalAudit.snapshot.failTotal}
+                cumulativeSeries={historicalAudit.snapshot.cumulativeSeries}
+                rpsSeries={historicalAudit.snapshot.rpsSeries}
+                statusCounts={historicalAudit.snapshot.statusCounts}
+                feed={historicalAudit.snapshot.feed}
+                webrtcAggregate={historicalAudit.snapshot.webrtcAggregate}
+                webrtcSeries={historicalAudit.snapshot.webrtcSeries}
+                webrtcLastByUser={historicalAudit.snapshot.webrtcLastByUser}
+                liveTestRunning={false}
+                testElapsedSec={historicalAudit.snapshot.testElapsedSec}
+                activeSessionId={historicalAudit.snapshot.activeSessionId}
+                auditTargetUsers={0}
+                auditChaos={historicalAudit.session?.chaosProfile || "off"}
+                controlBusy={false}
+                seriesTimeMs={historicalAudit.snapshot.seriesTimeMs}
+                testWallStartMs={historicalAudit.snapshot.testWallStartMs}
+                historical
+              />
+            </>
+          )}
         </section>
       ) : null}
     </main>

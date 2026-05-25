@@ -55,8 +55,8 @@ Estrutura criada para o Stream Sentry:
 
 ## Testar com Zoom
 
-O cliente web público (`zoom.us/wc/...` ou `/j/...`) costuma exigir **login**, **CAPTCHA** ou bloquear automação — não é um alvo confiável para Puppeteer “só com URL”.
+O runner reconhece links Zoom (`zoom.us/j/...`, `zoom.us/wc/...`, `zoom.com/...`), não envia `Authorization` para esses domínios e tenta abrir o **web client** automaticamente. Links `/j/<id>` são convertidos para `/wc/join/<id>` quando possível.
 
-Cenário viável: uma **página sua** (React) que incorpora o **Zoom Meeting SDK** com JWT gerado no seu backend (SDK Key/Secret da Zoom Marketplace). Aí a **URL da API** seria essa página (ex.: `https://meuapp.com/zoom-room`) e o **token** seria o que sua aplicação espera (Bearer), não o JWT da Zoom em si, a menos que você repasse no header para a sua API.
+O cliente web público ainda pode exigir **login**, **CAPTCHA** ou bloquear automação. Para senha, prefira incluir `?pwd=...` no link ou configurar `ZOOM_PASSCODE` no `.env`; para identificar o participante use `ZOOM_DISPLAY_NAME`.
 
-Para o TCC/demonstração rápida, use **Jitsi** ou uma página **WebRTC mínima** sua; reserve Zoom para quando tiver o SDK embedado e credenciais.
+Cenário mais estável: uma **página sua** (React) que incorpora o **Zoom Meeting SDK** com JWT gerado no seu backend (SDK Key/Secret da Zoom Marketplace). Aí a **URL alvo** seria essa página (ex.: `https://meuapp.com/zoom-room`) e o **token** seria o que sua aplicação espera (Bearer), não o JWT da Zoom em si, a menos que você repasse no header para a sua API.
