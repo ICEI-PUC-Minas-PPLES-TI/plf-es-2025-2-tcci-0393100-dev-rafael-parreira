@@ -77,6 +77,7 @@ const jitsiPostHostAuthDelayMs = Math.max(0, Number.parseInt(process.env.JITSI_P
 const zoomDisplayName = (process.env.ZOOM_DISPLAY_NAME || "Stream Sentry Bot").trim();
 const zoomPasscode = (process.env.ZOOM_PASSCODE || "").trim();
 const zoomUseAccessTokenAsPasscode = process.env.ZOOM_USE_ACCESS_TOKEN_AS_PASSCODE === "1";
+const wherebyDisplayName = (process.env.WHEREBY_DISPLAY_NAME || "Stream Sentry Bot").trim();
 
 /**
  * Clicar em «Eu sou o anfitrião» abre o Google; sem completar o login ficas bloqueado.
@@ -267,7 +268,8 @@ async function dwellWithControls(ms, opts) {
   }
 }
 
-if (!apiUrl || !accessToken || Number.isNaN(virtualUsers)) {
+const accessTokenRequired = !isWhereby(apiUrl || "");
+if (!apiUrl || (accessTokenRequired && !accessToken) || Number.isNaN(virtualUsers)) {
   console.error("Missing required arguments: apiUrl accessToken virtualUsers");
   process.exit(1);
 }
@@ -306,7 +308,7 @@ function installStreamSentryRtcHook() {
       if (!pc || arr.includes(pc)) return;
       arr.push(pc);
       pc.addEventListener("connectionstatechange", () => {
-        if (pc.connectionState === "closed" || pc.connectionState === "failed") {
+        if (pc.connectionState === "closed") {
           const i = arr.indexOf(pc);
           if (i >= 0) arr.splice(i, 1);
         }
@@ -882,8 +884,17 @@ function isZoomHost(urlStr) {
   }
 }
 
+function isWhereby(urlStr) {
+  try {
+    const h = new URL(urlStr).hostname.toLowerCase();
+    return h === "whereby.com" || h.endsWith(".whereby.com");
+  } catch {
+    return false;
+  }
+}
+
 function isMultiPageRtcHost(urlStr) {
-  return isJitsiHost(urlStr) || isZoomHost(urlStr);
+  return isJitsiHost(urlStr) || isZoomHost(urlStr) || isWhereby(urlStr);
 }
 
 function normalizeZoomJoinUrl(urlStr) {
@@ -1443,6 +1454,239 @@ async function tryZoomEnterConference(page, userId) {
   return true;
 }
 
+async function tryWherebyEnterConference(page, userId) {
+  const emitWherebyState = async (label) => {
+    const state = await page
+      .evaluate(() => {
+        const buttons = [...document.querySelectorAll("button, a, [role='button'], input[type='submit']")]
+          .map((el) => (el.innerText || el.textContent || el.value || el.getAttribute("aria-label") || "").trim())
+          .filter(Boolean)
+          .slice(0, 12);
+        const text = (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 500);
+        return { title: document.title, url: location.href, buttons, text };
+      })
+      .catch((e) => ({ error: String(e?.message || e).slice(0, 180) }));
+    emit({ type: "telemetry", event: "whereby_join_state", userId, label, state });
+  };
+
+  const tryClickVisible = async (selector) => {
+    try {
+      const el = await page.$(selector);
+      if (!el) return false;
+      const box = await el.boundingBox();
+      if (!box || box.width < 2 || box.height < 2) return false;
+      await el.click();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const tryFillName = async () => {
+    // Excluir inputs de e-mail ou password que estejam num painel de login
+    const nameSelectors = [
+      'input[data-testid="name-input"]',
+      'input[data-testid="precall-name-input"]',
+      'input[placeholder*="seu nome" i]',
+      'input[placeholder*="your name" i]',
+      'input[name="displayName"]',
+      'input[name="name"]',
+      'input[autocomplete="name"]'
+    ];
+    for (const sel of nameSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (!el) continue;
+        // Verificar que não é input de email/password pelo tipo
+        const inputType = await el.evaluate((e) => (e.type || "text").toLowerCase());
+        if (inputType === "email" || inputType === "password") continue;
+        const box = await el.boundingBox();
+        if (!box || box.width < 2 || box.height < 2) continue;
+        await el.click({ clickCount: 3 });
+        await el.press("Backspace");
+        await el.type(wherebyDisplayName, { delay: 40 });
+        return sel;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  };
+
+  const tryClickJoin = async () => {
+    // Selectores específicos do Whereby
+    const joinSelectors = [
+      '[data-testid="join-button"]',
+      '[data-testid="precall-join-button"]',
+      '[data-testid="enter-room-button"]',
+      '[data-testid="knock-button"]'
+    ];
+    for (const sel of joinSelectors) {
+      if (await tryClickVisible(sel)) return `sel:${sel}`;
+    }
+    // Procurar "Juntar-se" ou "Join" de forma explícita — ANTES da busca genérica por área
+    try {
+      const clicked = await page.evaluate(() => {
+        // 1ª passagem: texto exacto de "juntar-se" / "join meeting" — maior prioridade
+        const primaryRe = /(juntar-se|juntar se|join meeting|join the meeting|join now)/i;
+        // 2ª passagem: "entrar na sala" ou "entrar" apenas se NÃO estiver no cabeçalho/nav
+        const secondaryRe = /^entrar na sala$|^enter room$|^enter meeting$/i;
+        // Qualquer "entrar"/"enter" simples — último recurso (pode ser botão de login)
+        const tertiaryRe = /^entrar$|^enter$|^participar$|^ingressar$|^continuar$|^continue$/i;
+        const avoidRe = /(leave|sair|cancel|cancelar|sign in|log in|sign up|criar conta|política|privacy|language|idioma)/i;
+
+        const isInNav = (el) => !!(el.closest("nav, header, [role='navigation'], [role='banner']"));
+
+        const tryBest = (re, excludeNav) => {
+          let best = null; let bestArea = 0;
+          for (const el of document.querySelectorAll("button, [role='button'], input[type='submit']")) {
+            const txt = (el.innerText || el.textContent || el.value || el.getAttribute("aria-label") || "").trim();
+            if (!txt || txt.length > 80) continue;
+            if (!re.test(txt)) continue;
+            if (avoidRe.test(txt)) continue;
+            if (excludeNav && isInNav(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) continue;
+            const st = window.getComputedStyle(el);
+            if (st.display === "none" || st.visibility === "hidden") continue;
+            const area = r.width * r.height;
+            if (area > bestArea) { bestArea = area; best = { el, txt }; }
+          }
+          if (best) { best.el.scrollIntoView({ block: "center" }); best.el.click(); return best.txt.slice(0, 60); }
+          return null;
+        };
+
+        return tryBest(primaryRe, false)
+          || tryBest(secondaryRe, false)
+          || tryBest(tertiaryRe, true); // exclui nav/header para "entrar" simples
+      });
+      if (clicked) return `text:${clicked}`;
+    } catch {}
+    return null;
+  };
+
+  await emitWherebyState("initial");
+
+  // Detecta se o bot já entrou na sala.
+  // NÃO usa vídeo/câmera como sinal — a pré-sala também tem preview de vídeo.
+  const isInRoom = async () => {
+    return page.evaluate(() => {
+      // Se ainda existir o botão de juntar visível → NÃO estamos na sala
+      const joinRe = /(juntar-se|juntar se|join meeting|join the meeting|join now)/i;
+      for (const el of document.querySelectorAll("button, [role='button'], input[type='submit']")) {
+        const txt = (el.innerText || el.textContent || el.value || "").trim();
+        if (!joinRe.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 2 && r.height > 2) return false; // pré-sala ainda visível
+      }
+
+      // Sinal positivo 1: botão leave/sair (regex alargada — "sair da reunião", "leave", etc.)
+      const leaveRe = /\bleave\b|sair da reuni|sair da sala|\bend call\b|encerrar|hang up|desligar/i;
+      for (const el of document.querySelectorAll("button, [role='button']")) {
+        const txt = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.title || "").trim();
+        if (!leaveRe.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 2) return true;
+      }
+
+      // Sinal positivo 2: contador de participantes "X/Y" na barra de ferramentas da sala
+      for (const el of document.querySelectorAll("button, [role='button'], [aria-label]")) {
+        const txt = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim();
+        if (!/^\d+\s*\/\s*\d+$/.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 2) return true;
+      }
+
+      return false;
+    }).catch(() => false);
+  };
+
+  let nameFilled = false;
+
+  for (let attempt = 0; attempt < 70; attempt++) {
+    if (attempt > 0 && attempt % 10 === 0) {
+      await emitWherebyState(`attempt-${attempt}`);
+    }
+
+    // 0) Verificar se já entrou na sala
+    if (await isInRoom()) {
+      emit({ type: "telemetry", event: "whereby_join_step", userId, action: "entered-room" });
+      break;
+    }
+
+    // 1) Fechar painel de login lateral (X / chevron) — antes de qualquer outra ação
+    const loginPanelClosed = await page.evaluate(() => {
+      // O painel de login tem um botão X/fechar no canto superior direito
+      const closeRe = /^[×✕✗✖>›»]$|^close$|^fechar$|^dismiss$/i;
+      for (const el of document.querySelectorAll("button, [role='button'], a")) {
+        const txt = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.title || "").trim();
+        if (!closeRe.test(txt) && !txt.match(/^[×✕✗✖]$/)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        // Deve estar no lado direito da janela
+        if (r.left < window.innerWidth * 0.45) continue;
+        el.click();
+        return true;
+      }
+      return false;
+    }).catch(() => false);
+    if (loginPanelClosed) {
+      emit({ type: "telemetry", event: "whereby_join_step", userId, action: "closed-login-panel" });
+      await delay(800);
+      continue;
+    }
+
+    // 2) Aceitar política de privacidade / cookies
+    const privacyAccepted = await page.evaluate(() => {
+      const acceptRe = /(eu aceito|aceitar|i accept|accept all|acepto|accept)/i;
+      for (const el of document.querySelectorAll("button, [role='button'], input[type='submit']")) {
+        const txt = (el.innerText || el.textContent || el.value || "").trim();
+        if (!acceptRe.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") continue;
+        el.click();
+        return txt.slice(0, 40);
+      }
+      return null;
+    }).catch(() => null);
+    if (privacyAccepted) {
+      emit({ type: "telemetry", event: "whereby_join_step", userId, action: `privacy:${privacyAccepted}` });
+      await delay(1200);
+      continue;
+    }
+
+    // 3) Preencher nome — APENAS em inputs de pré-sala (excluir inputs de email)
+    if (!nameFilled) {
+      const filled = await tryFillName();
+      if (filled) {
+        nameFilled = true;
+        emit({ type: "telemetry", event: "whereby_join_step", userId, action: `filled-name:${filled}` });
+        await delay(800);
+        continue;
+      }
+    }
+
+    // 4) Clicar no botão de entrar
+    const joined = await tryClickJoin();
+    if (joined) {
+      emit({ type: "telemetry", event: "whereby_join_step", userId, action: `join:${joined}` });
+      await delay(3000);
+      if (await isInRoom()) {
+        emit({ type: "telemetry", event: "whereby_join_step", userId, action: "entered-room" });
+        break;
+      }
+      nameFilled = false;
+    }
+
+    await delay(800);
+  }
+
+  await emitWherebyState("final");
+  return true;
+}
+
 function emptyWebRtcSummary() {
   return {
     peerConnections: 0,
@@ -1557,9 +1801,37 @@ async function collectStatsFromSingleFrame(frame) {
       }
       const fromHook = G.__streamSentryPCs || [];
       const fromJitsi = findPcsFromJitsiGlobals();
+
+      // Varredura agressiva para apps que guardam RTCPeerConnection em módulos privados (ex: Whereby)
+      const findPcsFromGlobalScan = () => {
+        const Native = (G.RTCPeerConnection && G.RTCPeerConnection.__streamSentryNative) || G.RTCPeerConnection;
+        if (!Native) return [];
+        const found = [];
+        const seen = new Set();
+        const tryAdd = (v) => {
+          if (!v || seen.has(v)) return;
+          seen.add(v);
+          try { if (v instanceof Native && v.connectionState !== "closed") found.push(v); } catch {}
+        };
+        // Varrer propriedades do global até profundidade 3
+        const scan = (obj, depth) => {
+          if (!obj || depth > 3) return;
+          let keys;
+          try { keys = Object.keys(obj); } catch { return; }
+          for (let i = 0; i < Math.min(keys.length, 200); i++) {
+            let val;
+            try { val = obj[keys[i]]; } catch { continue; }
+            tryAdd(val);
+            if (val && typeof val === "object" && depth < 3) scan(val, depth + 1);
+          }
+        };
+        scan(G, 0);
+        return found;
+      };
+
       const dedup = new Set();
       const pcs = [];
-      for (const p of [...fromHook, ...fromJitsi]) {
+      for (const p of [...fromHook, ...fromJitsi, ...findPcsFromGlobalScan()]) {
         if (!p || p.connectionState === "closed") continue;
         if (dedup.has(p)) continue;
         dedup.add(p);
@@ -1983,9 +2255,22 @@ async function runVirtualUser(userId, opts = {}) {
       });
     }
 
-    const targetUrl = isZoomHost(apiUrl) ? normalizeZoomJoinUrl(apiUrl) : apiUrl;
+    let targetUrl = isZoomHost(apiUrl) ? normalizeZoomJoinUrl(apiUrl) : apiUrl;
     if (targetUrl !== apiUrl) {
       emit({ type: "telemetry", event: "zoom_url_normalized", userId, url: targetUrl.slice(0, 800) });
+    }
+    // Pré-preenche o nome na URL do Whereby para ajudar o fluxo de pré-sala
+    if (isWhereby(targetUrl)) {
+      try {
+        const u = new URL(targetUrl);
+        if (!u.searchParams.has("displayName")) {
+          u.searchParams.set("displayName", wherebyDisplayName);
+          targetUrl = u.toString();
+        }
+      } catch {}
+      // Injectar o hook ANTES de qualquer JS da página para apanhar as RTCPeerConnections
+      // que o Whereby cria logo no carregamento (antes do injectRtcHookEverywhere pós-entrada).
+      await page.evaluateOnNewDocument(installStreamSentryRtcHook).catch(() => {});
     }
     await page.goto(targetUrl, {
       waitUntil: "domcontentloaded",
@@ -2148,6 +2433,93 @@ async function runVirtualUser(userId, opts = {}) {
       });
     }
 
+    if (isWhereby(apiUrl)) {
+      emit({
+        type: "telemetry",
+        event: "whereby_join_mode",
+        userId,
+        message:
+          "Whereby detectado. A entrar na sala automaticamente via pré-sala. Se necessário, defina WHEREBY_DISPLAY_NAME no .env."
+      });
+
+      // Injectar hook em workers que o Whereby cria (o RTCPeerConnection pode correr num DedicatedWorker)
+      const injectIntoWherebyWorkers = async () => {
+        for (const target of browser.targets()) {
+          try {
+            const type = target.type();
+            if (type !== "worker" && type !== "shared_worker") continue;
+            const worker = await target.worker();
+            if (!worker) continue;
+            await worker.evaluate(installStreamSentryRtcHook).catch(() => {});
+          } catch {}
+        }
+      };
+
+      // Ouvir workers criados durante a sessão
+      browser.on("targetcreated", async (target) => {
+        try {
+          const type = target.type();
+          if (type !== "worker" && type !== "shared_worker") return;
+          const worker = await target.worker();
+          if (!worker) return;
+          await worker.evaluate(installStreamSentryRtcHook).catch(() => {});
+        } catch {}
+      });
+
+      await tryWherebyEnterConference(page, userId);
+      for (let wave = 0; wave < 7; wave++) {
+        await delay(2000);
+        await injectRtcHookEverywhere(browser);
+        await injectIntoWherebyWorkers();
+      }
+      // Diagnóstico: verificar o que está acessível no contexto JS da página
+      const wherebyDiag = await page.evaluate(async () => {
+        const G = globalThis;
+        const C = G.RTCPeerConnection;
+        const Native = C?.__streamSentryNative || C;
+        const hookedPCs = G.__streamSentryPCs?.length ?? -1;
+
+        // Listar workers ativos acessíveis
+        const workerKeys = [];
+        for (const k of Object.getOwnPropertyNames(G)) {
+          try {
+            const v = G[k];
+            if (v instanceof Worker || v instanceof SharedWorker) workerKeys.push(k);
+          } catch {}
+        }
+
+        // Verificar se algum global tem connectionState (sinal de RTCPeerConnection)
+        let pcInGlobal = 0;
+        if (Native) {
+          for (const k of Object.getOwnPropertyNames(G)) {
+            try { if (G[k] instanceof Native) pcInGlobal++; } catch {}
+          }
+        }
+
+        // Contar targets/frames
+        const frameCount = window.frames?.length ?? 0;
+
+        return {
+          rtcWrapped: !!(C?.__streamSentryWrapped),
+          hookedPCs,
+          pcInGlobal,
+          frameCount,
+          workerKeys: workerKeys.slice(0, 5),
+          url: location.href.slice(0, 120)
+        };
+      }).catch((e) => ({ error: String(e?.message || e).slice(0, 100) }));
+
+      emit({ type: "telemetry", event: "whereby_rtc_diag", userId, ...wherebyDiag });
+
+      emit({
+        type: "telemetry",
+        event: "whereby_hint",
+        userId,
+        message:
+          "Se PeerConnections=0: confirme que a sala está activa e acessível. Use PUPPETEER_HEADFUL=1 para depurar visualmente. Salas trancadas (knock) podem necessitar de aprovação manual do anfitrião."
+      });
+    }
+
     const tick = Math.max(1000, statsIntervalMs);
     let probeTicks = 0;
     /**
@@ -2193,6 +2565,28 @@ async function runVirtualUser(userId, opts = {}) {
         }
       } catch (e) {
         statsNote += `tick ${String(e?.message || e).slice(0, 200)}; `;
+      }
+      if (isWhereby(apiUrl) && webrtcStatsTickIndex <= 4) {
+        const dbg = await page.evaluate(() => {
+          const G = globalThis;
+          const pcs = G.__streamSentryPCs || [];
+          return {
+            count: pcs.length,
+            states: pcs.slice(0, 6).map((p) => ({
+              conn: p?.connectionState,
+              ice: p?.iceConnectionState,
+              sig: p?.signalingState
+            }))
+          };
+        }).catch((e) => ({ error: String(e?.message || e).slice(0, 80) }));
+        emit({
+          type: "telemetry",
+          event: "whereby_stats_debug",
+          userId,
+          tick: webrtcStatsTickIndex,
+          hookPCs: dbg,
+          summaryPCs: summary.peerConnections
+        });
       }
       emit({
         type: "telemetry",
@@ -2267,7 +2661,8 @@ async function runVirtualUser(userId, opts = {}) {
       }
     };
 
-    const rtcMeetMinDwell = 28000;
+    // Whereby precisa de mais tempo para coletar stats WebRTC significativas (ICE + SFU + media)
+    const rtcMeetMinDwell = isWhereby(apiUrl) ? 120000 : 28000;
     const stay = Math.max(2000, isMultiPageRtcHost(apiUrl) ? Math.max(dwellMs, rtcMeetMinDwell) : dwellMs);
     await dwellWithControls(stay, { signal, getControl });
 

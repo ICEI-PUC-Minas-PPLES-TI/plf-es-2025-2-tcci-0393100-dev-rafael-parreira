@@ -95,6 +95,15 @@ const CHAOS_START_OPTIONS = [
   { value: "dns_failure", label: "Falha DNS (simulada)" }
 ];
 
+function isWherebyUrl(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "whereby.com" || h.endsWith(".whereby.com");
+  } catch {
+    return false;
+  }
+}
+
 function validateConfig(config) {
   const users = Number(config.virtualUsers);
   if (!Number.isInteger(users) || users < 1 || users > 50) {
@@ -108,7 +117,7 @@ function validateConfig(config) {
   } catch {
     throw new Error("Informe uma URL de API válida.");
   }
-  if (!config.accessToken.trim()) {
+  if (!isWherebyUrl(config.apiUrl) && !config.accessToken.trim()) {
     throw new Error("Informe o token de acesso.");
   }
   return {
@@ -130,6 +139,7 @@ export default function App() {
   const [registerForm, setRegisterForm] = useState({ name: "", email: "", password: "" });
   const [puppeteerLoading, setPuppeteerLoading] = useState(false);
   const [puppeteerResult, setPuppeteerResult] = useState(null);
+  const [wherebyCreating, setWherebyCreating] = useState(false);
   const [testStarting, setTestStarting] = useState(false);
   const [testStopping, setTestStopping] = useState(false);
   const [liveTestRunning, setLiveTestRunning] = useState(false);
@@ -305,6 +315,21 @@ export default function App() {
       setMessage("Configurações salvas com sucesso.", "success");
     } catch (error) {
       setMessage(error.message, "error");
+    }
+  }
+
+  async function handleCreateWherebyRoom() {
+    try {
+      setWherebyCreating(true);
+      setMessage("Criando sala Whereby…", "");
+      const result = await postWithAuth("/platform/whereby/create-room", {}, authToken);
+      setConfigForm((prev) => ({ ...prev, apiUrl: result.roomUrl, accessToken: "" }));
+      setMessage(`Sala criada: ${result.roomUrl}`, "success");
+    } catch (error) {
+      if (error.unauthorized) { handleSessionInvalid(); return; }
+      setMessage(error.message, "error");
+    } finally {
+      setWherebyCreating(false);
     }
   }
 
@@ -690,8 +715,7 @@ export default function App() {
             <>
               <p className="config-intro">
                 Defina a URL alvo, o token Bearer enviado nas requisições e quantos usuários virtuais o Puppeteer irá
-                simular em lotes. Também pode usar salas WebRTC como Jitsi ou Zoom; nesses domínios públicos o runner não
-                injeta o header Authorization para não quebrar a pré-sala.
+                simular em lotes. Também pode usar salas WebRTC como Jitsi ou Whereby; nesses domínios o token é opcional.
               </p>
               <p className="muted-small">
                 Zoom: prefira uma página sua com Zoom Meeting SDK. Links públicos <code>zoom.us/j/...</code> são tentados via
@@ -715,16 +739,28 @@ export default function App() {
                     onChange={(e) => setConfigForm({ ...configForm, apiUrl: e.target.value })}
                     required
                   />
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={handleCreateWherebyRoom}
+                    disabled={wherebyCreating}
+                    style={{ marginTop: "8px" }}
+                  >
+                    {wherebyCreating ? "Criando sala…" : "Criar sala Whereby"}
+                  </button>
                 </div>
                 <div className="config-block">
                   <h2>Autenticação</h2>
-                  <label htmlFor="start-token">Token de acesso</label>
+                  <label htmlFor="start-token">
+                    Token de acesso{isWherebyUrl(configForm.apiUrl) ? " (não necessário para Whereby)" : ""}
+                  </label>
                   <input
                     id="start-token"
                     type="text"
                     value={configForm.accessToken}
                     onChange={(e) => setConfigForm({ ...configForm, accessToken: e.target.value })}
-                    required
+                    required={!isWherebyUrl(configForm.apiUrl)}
+                    placeholder={isWherebyUrl(configForm.apiUrl) ? "Opcional para Whereby" : ""}
                   />
                 </div>
                 <div className="config-block">
@@ -930,6 +966,7 @@ export default function App() {
               feed={telemetry.feed}
               webrtcAggregate={telemetry.webrtcAggregate}
               webrtcSeries={telemetry.webrtcSeries}
+              webrtcPerUserSeries={telemetry.webrtcPerUserSeries}
               webrtcLastByUser={telemetry.webrtcLastByUser}
               liveTestRunning={liveTestRunning}
               testElapsedSec={telemetry.testElapsedSec ?? activeTestElapsedSec}

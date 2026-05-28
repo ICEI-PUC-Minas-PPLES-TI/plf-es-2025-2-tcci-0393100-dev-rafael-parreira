@@ -261,6 +261,8 @@ function getAuditStatus({ connected, liveTestRunning, lastEvent, historical }) {
   return { label: "Em execução", tone: "running" };
 }
 
+const USER_PALETTE = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#3b82f6", "#f97316", "#06b6d4", "#ec4899"];
+
 export default function AuditDashboard({
   connected,
   lastEvent,
@@ -273,6 +275,7 @@ export default function AuditDashboard({
   feed,
   webrtcAggregate,
   webrtcSeries,
+  webrtcPerUserSeries = {},
   webrtcLastByUser,
   liveTestRunning,
   testElapsedSec,
@@ -291,6 +294,18 @@ export default function AuditDashboard({
   historical = false
 }) {
   const auditStatus = getAuditStatus({ connected, liveTestRunning, lastEvent, historical });
+
+  const userIds = Object.keys(webrtcPerUserSeries || {}).sort((a, b) => Number(a) - Number(b));
+  const buildMultiSeries = (key) =>
+    userIds
+      .map((uid, i) => ({
+        values: webrtcPerUserSeries[uid]?.[key] || [],
+        timeMs: webrtcPerUserSeries[uid]?.timeMs || [],
+        color: USER_PALETTE[i % USER_PALETTE.length],
+        userId: uid
+      }))
+      .filter((s) => s.values.length > 0);
+
   const hasWebrtcConnection =
     (webrtcAggregate?.peerConnections || 0) > 0 ||
     (webrtcAggregate?.roundTripTimeMs != null && Number.isFinite(webrtcAggregate.roundTripTimeMs));
@@ -468,6 +483,7 @@ export default function AuditDashboard({
         </p>
         <div className="audit-charts webrtc-charts">
           <TimeSeriesLineChart
+            multiSeries={buildMultiSeries("rttMs")}
             values={webrtcSeries.rttMs}
             timeMs={seriesTimeMs.webrtc?.rttMs}
             testWallStartMs={testWallStartMs}
@@ -477,6 +493,7 @@ export default function AuditDashboard({
             metricKind="rtt"
           />
           <TimeSeriesLineChart
+            multiSeries={buildMultiSeries("jitterVideo")}
             values={webrtcSeries.jitterVideo}
             timeMs={seriesTimeMs.webrtc?.jitterVideo}
             testWallStartMs={testWallStartMs}
@@ -487,6 +504,7 @@ export default function AuditDashboard({
             unavailableMessage={mediaStatsUnavailable ? mediaUnavailableMessage : ""}
           />
           <TimeSeriesLineChart
+            multiSeries={buildMultiSeries("downlinkKbps")}
             values={webrtcSeries.downlinkKbps}
             timeMs={seriesTimeMs.webrtc?.downlinkKbps}
             testWallStartMs={testWallStartMs}
@@ -496,6 +514,7 @@ export default function AuditDashboard({
             metricKind="downlinkKbps"
           />
           <TimeSeriesLineChart
+            multiSeries={buildMultiSeries("fpsIn")}
             values={webrtcSeries.fpsIn}
             timeMs={seriesTimeMs.webrtc?.fpsIn}
             testWallStartMs={testWallStartMs}

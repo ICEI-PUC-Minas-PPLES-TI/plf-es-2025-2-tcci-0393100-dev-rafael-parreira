@@ -5,10 +5,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -217,6 +219,7 @@ func main() {
 	mux.HandleFunc("GET /reports/session/{id}", server.handleGetSessionReportDetail)
 	mux.HandleFunc("GET /reports/export", server.handleExportReports)
 	mux.HandleFunc("GET /ws/telemetry", server.handleWSTelemetry)
+	mux.HandleFunc("POST /platform/whereby/create-room", server.handleWherebyCreateRoom)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("Stream Sentry Auth API (Go) running on %s", addr)
@@ -589,9 +592,33 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 
 	s.testMu.Lock()
 	if s.testRunning {
+		oldCancel := s.testCancel
 		s.testMu.Unlock()
-		writeJSON(w, http.StatusConflict, map[string]string{"message": "a test is already running"})
-		return
+		if oldCancel != nil {
+			oldCancel()
+		}
+		// Wait up to 3 s for the old test goroutine to finish
+		deadline := time.Now().Add(3 * time.Second)
+		stopped := false
+		for time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			s.testMu.Lock()
+			if !s.testRunning {
+				stopped = true
+				break
+			}
+			s.testMu.Unlock()
+		}
+		if !stopped {
+			s.testMu.Lock() // re-acquire after deadline expired
+		}
+		// Force-reset in case goroutine still hasn't cleaned up
+		s.testRunning = false
+		s.testCancel = nil
+		s.testSessionID = ""
+		s.testStartedAt = time.Time{}
+		s.testUsers = 0
+		// mutex is held here; fall through to set new test state
 	}
 	s.testRunning = true
 	s.testSessionID = sessionID
@@ -894,7 +921,9 @@ func validateTechnicalConfig(apiURL string, accessToken string, virtualUsers int
 		return errors.New("apiUrl must use http or https")
 	}
 
-	if strings.TrimSpace(accessToken) == "" {
+	h := strings.ToLower(parsedURL.Hostname())
+	isWhereby := h == "whereby.com" || strings.HasSuffix(h, ".whereby.com")
+	if !isWhereby && strings.TrimSpace(accessToken) == "" {
 		return errors.New("accessToken is required")
 	}
 
@@ -911,4 +940,87 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// handleWherebyCreateRoom cria uma sala Whereby via REST API e devolve a roomUrl.
+// Requer WHEREBY_API_KEY no .env.
+// POST /platform/whereby/create-room
+// Body (opcional): { "endDate": "2099-01-01T00:00:00.000Z" }
+func (s *authServer) handleWherebyCreateRoom(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
+		return
+	}
+
+	apiKey := strings.TrimSpace(os.Getenv("WHEREBY_API_KEY"))
+	if apiKey == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"message": "WHEREBY_API_KEY não configurada. Adicione-a ao .env do backend.",
+		})
+		return
+	}
+
+	// Lê endDate opcional do body; default: 7 dias a partir de agora.
+	type createRoomRequest struct {
+		EndDate string `json:"endDate,omitempty"`
+	}
+	var req createRoomRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if strings.TrimSpace(req.EndDate) == "" {
+		req.EndDate = time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
+	}
+
+	// Monta payload para a API do Whereby.
+	wherebyBody, _ := json.Marshal(map[string]any{
+		"endDate": req.EndDate,
+		"fields":  []string{"hostRoomUrl"},
+	})
+
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
+		"https://api.whereby.dev/v1/meetings",
+		bytes.NewReader(wherebyBody),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "erro ao criar pedido HTTP"})
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"message": "falha ao contactar a API do Whereby: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		log.Printf("whereby create-room: status %d body %s", resp.StatusCode, string(respBody))
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"message": fmt.Sprintf("Whereby API devolveu status %d. Verifique a WHEREBY_API_KEY.", resp.StatusCode),
+		})
+		return
+	}
+
+	var wherebyResp map[string]any
+	if err := json.Unmarshal(respBody, &wherebyResp); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "resposta inesperada da API Whereby"})
+		return
+	}
+
+	roomUrl, _ := wherebyResp["roomUrl"].(string)
+	hostRoomUrl, _ := wherebyResp["hostRoomUrl"].(string)
+	meetingId, _ := wherebyResp["meetingId"].(string)
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"roomUrl":     roomUrl,
+		"hostRoomUrl": hostRoomUrl,
+		"meetingId":   meetingId,
+		"endDate":     wherebyResp["endDate"],
+		"hint":        "Use roomUrl para participantes e hostRoomUrl para o anfitrião. Passe roomUrl como apiUrl no /test/start.",
+	})
 }

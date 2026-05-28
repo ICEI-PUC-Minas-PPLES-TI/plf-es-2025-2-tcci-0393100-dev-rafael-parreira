@@ -1463,3 +1463,55 @@ select {
   font-weight: 400;
 }
 
+.chart-tooltip-user-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.18rem;
+}
+
+.chart-tooltip-user-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chart-tooltip-user-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  min-width: 1.8rem;
+}
+
+.chart-tooltip-val-inline {
+  color: #a5b4fc;
+  font-weight: 600;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  padding: 0.2rem 0 0.1rem 4.5rem;
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.chart-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chart-legend-label {
+  color: #cbd5e1;
+  font-size: 0.7rem;
+}
+

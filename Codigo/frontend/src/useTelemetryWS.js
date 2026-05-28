@@ -335,6 +335,10 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
   /** Soma de bytes (todos os VU) + timestamp — taxa recebida coerente com vários browser. */
   const webrtcBytesTotalRef = useRef({ ts: 0, sumBytes: 0 });
   const webrtcFramesByUserRef = useRef({});
+  /** Séries por utilizador virtual: { [uid]: { rttMs, jitterVideo, downlinkKbps, fpsIn, timeMs } } */
+  const webrtcPerUserSeriesRef = useRef({});
+  /** Bytes anteriores por utilizador para calcular downlink individual. */
+  const prevBytesPerUserRef = useRef({});
 
   const [webrtcAggregate, setWebrtcAggregate] = useState(() => aggregateWebRTC({}));
   const [webrtcSeries, setWebrtcSeries] = useState({
@@ -344,6 +348,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
     fpsIn: []
   });
   const [webrtcLastByUser, setWebrtcLastByUser] = useState({});
+  const [webrtcPerUserSeries, setWebrtcPerUserSeries] = useState({});
   const [testElapsedSec, setTestElapsedSec] = useState(null);
   const [elapsedSeries, setElapsedSeries] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState("");
@@ -412,6 +417,8 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       webrtcFramesByUserRef.current = {};
       webrtcSeriesRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
       webrtcTimeMsRef.current = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+      webrtcPerUserSeriesRef.current = {};
+      prevBytesPerUserRef.current = {};
       cumulativeTimeMsRef.current = [];
       setRequestTotal(0);
       setResponseTotal(0);
@@ -424,6 +431,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       setWebrtcAggregate(aggregateWebRTC({}));
       setWebrtcSeries({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
       setWebrtcLastByUser({});
+      setWebrtcPerUserSeries({});
       setTestElapsedSec(null);
       setElapsedSeries([]);
       setActiveSessionId("");
@@ -493,6 +501,32 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       wst.downlinkKbps = pushT(wst.downlinkKbps);
       ws.fpsIn = push(ws.fpsIn, fps != null && Number.isFinite(fps) ? fps : 0);
       wst.fpsIn = pushT(wst.fpsIn);
+
+      // Séries por utilizador virtual
+      const pus = webrtcPerUserSeriesRef.current;
+      const pbu = prevBytesPerUserRef.current;
+      for (const [uid, s] of Object.entries(m)) {
+        if (!s || !summaryHasWebrtcActivity(s)) continue;
+        if (!pus[uid]) pus[uid] = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [], timeMs: [] };
+        const us = pus[uid];
+        const uRtt = rttFromSummary(s);
+        const uJv = s.inboundVideo?.jitter != null ? s.inboundVideo.jitter * 1000 : null;
+        const uFps = s.inboundVideo?.framesPerSecond ?? null;
+        const uBytes = totalRtcpBytesIn(s);
+        let uDownKbps = 0;
+        const pb = pbu[uid];
+        if (pb && sampleMs > pb.ts && uBytes >= pb.sumBytes) {
+          const dt = (sampleMs - pb.ts) / 1000;
+          uDownKbps = ((uBytes - pb.sumBytes) * 8) / 1000 / Math.max(dt, 0.001);
+        }
+        pbu[uid] = { ts: sampleMs, sumBytes: uBytes };
+        const pushU = (arr, v) => [...arr, v != null && Number.isFinite(v) ? v : 0].slice(-cap);
+        us.rttMs = pushU(us.rttMs, uRtt);
+        us.jitterVideo = pushU(us.jitterVideo, uJv);
+        us.downlinkKbps = pushU(us.downlinkKbps, uDownKbps);
+        us.fpsIn = pushU(us.fpsIn, uFps);
+        us.timeMs = pushU(us.timeMs, sampleMs);
+      }
     };
 
     const flushWebrtcSeriesFromRef = () => {
@@ -525,6 +559,20 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
         downlinkKbps: s.downlinkKbps.slice(),
         fpsIn: s.fpsIn.slice()
       });
+      setWebrtcPerUserSeries(
+        Object.fromEntries(
+          Object.entries(webrtcPerUserSeriesRef.current).map(([uid, us]) => [
+            uid,
+            {
+              rttMs: us.rttMs.slice(),
+              jitterVideo: us.jitterVideo.slice(),
+              downlinkKbps: us.downlinkKbps.slice(),
+              fpsIn: us.fpsIn.slice(),
+              timeMs: us.timeMs.slice()
+            }
+          ])
+        )
+      );
       const rpsAll = [...rpsHistoryRef.current, b.count];
       const tAll = [...rpsHistoryTimeRef.current, Date.now()];
       const rpsStart = Math.max(0, rpsAll.length - 80);
@@ -792,6 +840,34 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
         if (data.event === "zoom_blocked" && data.message) {
           prependFeed({ kind: "fail", text: `Zoom bloqueado: ${String(data.message).slice(0, 240)}`, ts: data.ts });
         }
+        if (data.event === "whereby_join_mode" && data.message) {
+          prependFeed({ kind: "info", text: `Whereby: ${String(data.message).slice(0, 260)}`, ts: data.ts });
+        }
+        if (data.event === "whereby_join_step" && data.action) {
+          prependFeed({ kind: "info", text: `Whereby: ação de entrada — ${String(data.action).slice(0, 140)}`, ts: data.ts });
+        }
+        if (data.event === "whereby_join_state" && data.state) {
+          const st = data.state;
+          const buttons = Array.isArray(st.buttons) && st.buttons.length ? ` botões: ${st.buttons.slice(0, 5).join(" | ")}` : "";
+          const text = st.text ? ` — ${String(st.text).slice(0, 120)}` : "";
+          const error = st.error ? ` ERRO: ${String(st.error).slice(0, 80)}` : "";
+          prependFeed({ kind: "info", text: `Whereby estado (${data.label || "check"}): ${st.title || ""}${buttons}${text}${error}`.slice(0, 360), ts: data.ts });
+        }
+        if (data.event === "whereby_hint" && data.message) {
+          prependFeed({ kind: "info", text: `Whereby: ${String(data.message).slice(0, 260)}`, ts: data.ts });
+        }
+        if (data.event === "whereby_rtc_diag") {
+          const d = data;
+          const msg = `Whereby diagnóstico (user ${d.userId}): rtcWrapped=${d.rtcWrapped} hookedPCs=${d.hookedPCs} pcInGlobal=${d.pcInGlobal} frames=${d.frameCount} workers=[${(d.workerKeys||[]).join(",")}]${d.error ? " ERRO:"+d.error : ""}`;
+          prependFeed({ kind: d.hookedPCs > 0 || d.pcInGlobal > 0 ? "success" : "fail", text: msg, ts: data.ts });
+        }
+        if (data.event === "whereby_stats_debug") {
+          const h = data.hookPCs || {};
+          const states = (h.states || []).map((s) => `${s.conn}/${s.ice}`).join(", ") || "—";
+          const msg = `Whereby stats-debug (user ${data.userId}) tick=${data.tick}: hookPCs=${h.count ?? "?"} states=[${states}] summaryPCs=${data.summaryPCs}${h.error ? " ERR:"+h.error : ""}`;
+          prependFeed({ kind: (h.count || 0) > 0 ? "success" : "warn", text: msg, ts: data.ts });
+        }
+
         if (data.event === "zoom_stats_debug" && data.debug) {
           const types = Object.entries(data.debug.types || {})
             .sort((a, b) => Number(b[1]) - Number(a[1]))
@@ -821,14 +897,15 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
 
         /**
          * No modo *pool* o runner incrementa `userId` a cada browser (1,2,3,…). Os workers
-         * que já terminam emitem `user_done` — se não retirarmos do mapa, o dashboard
-         * acumula dezenas de “utilizadores” com a última amostra WebRTC, embora só N
-         * concorrentes existam (ex.: 5 no Jitsi).
+         * que já terminam emitem `user_done` — mantemos as últimas métricas para o dashboard
+         * mostrar os valores finais; o mapa é limpo pelo resetMetrics() no início do próximo teste.
+         * NÃO apagar aqui: zeraria os KPIs imediatamente após o teste terminar.
          */
-        if ((data.event === "user_done" || data.event === "user_error") && data.userId != null) {
+        if ((data.event === 'user_done' || data.event === 'user_error') && data.userId != null) {
+          // Marcar como concluído sem apagar — os valores finais ficam visíveis no dashboard
           const uid = String(data.userId);
-          if (Object.prototype.hasOwnProperty.call(lastByUserRef.current, uid)) {
-            delete lastByUserRef.current[uid];
+          if (lastByUserRef.current[uid]) {
+            lastByUserRef.current[uid] = { ...lastByUserRef.current[uid], _done: true };
             webrtcDirtyRef.current = true;
           }
         }
@@ -967,6 +1044,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
     lastEvent,
     webrtcAggregate,
     webrtcSeries,
+    webrtcPerUserSeries,
     webrtcLastByUser,
     testElapsedSec,
     elapsedSeries,
