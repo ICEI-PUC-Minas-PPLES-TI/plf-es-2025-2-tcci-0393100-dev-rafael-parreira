@@ -261,7 +261,29 @@ function getAuditStatus({ connected, liveTestRunning, lastEvent, historical }) {
   return { label: "Em execução", tone: "running" };
 }
 
-const USER_PALETTE = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#3b82f6", "#f97316", "#06b6d4", "#ec4899"];
+/**
+ * Gera N cores dentro de uma família de matiz (hue) usando variação de
+ * luminosidade e pequenos desvios de matiz para distinguir até 50 usuários.
+ * Combina 5 offsets de matiz × 8 níveis de luminosidade = 40 combinações únicas
+ * antes de repetir — mais que suficiente para 50 usuários.
+ */
+function makeFamilyPalette(baseHue, n = 50) {
+  const lits  = [55, 70, 40, 65, 80, 45, 75, 35];   // 8 níveis de luminosidade
+  const hoffs = [0, 15, -15, 25, -25];               // 5 offsets de matiz dentro da família
+  return Array.from({ length: n }, (_, i) => {
+    const hue = ((baseHue + hoffs[i % hoffs.length]) + 360) % 360;
+    const lit = lits[Math.floor(i / hoffs.length) % lits.length];
+    return `hsl(${hue}, 82%, ${lit}%)`;
+  });
+}
+
+// Uma família de cor por gráfico — claramente distintas entre si na roda de cores
+const CHART_PALETTES = {
+  rttMs:        makeFamilyPalette(270),  // Roxo
+  jitterVideo:  makeFamilyPalette(45),   // Âmbar / Amarelo
+  downlinkKbps: makeFamilyPalette(165),  // Verde / Teal
+  fpsIn:        makeFamilyPalette(340),  // Rosa / Pink
+};
 
 export default function AuditDashboard({
   connected,
@@ -296,15 +318,17 @@ export default function AuditDashboard({
   const auditStatus = getAuditStatus({ connected, liveTestRunning, lastEvent, historical });
 
   const userIds = Object.keys(webrtcPerUserSeries || {}).sort((a, b) => Number(a) - Number(b));
-  const buildMultiSeries = (key) =>
-    userIds
+  const buildMultiSeries = (key) => {
+    const palette = CHART_PALETTES[key] || makeFamilyPalette(200);
+    return userIds
       .map((uid, i) => ({
         values: webrtcPerUserSeries[uid]?.[key] || [],
         timeMs: webrtcPerUserSeries[uid]?.timeMs || [],
-        color: USER_PALETTE[i % USER_PALETTE.length],
+        color: palette[i] ?? palette[palette.length - 1],
         userId: uid
       }))
       .filter((s) => s.values.length > 0);
+  };
 
   const hasWebrtcConnection =
     (webrtcAggregate?.peerConnections || 0) > 0 ||
@@ -488,7 +512,7 @@ export default function AuditDashboard({
             timeMs={seriesTimeMs.webrtc?.rttMs}
             testWallStartMs={testWallStartMs}
             label="RTT"
-            color="#a78bfa"
+            color="hsl(270, 82%, 55%)"
             unit="ms"
             metricKind="rtt"
           />
@@ -498,7 +522,7 @@ export default function AuditDashboard({
             timeMs={seriesTimeMs.webrtc?.jitterVideo}
             testWallStartMs={testWallStartMs}
             label="Jitter vídeo"
-            color="#f472b6"
+            color="hsl(45, 82%, 55%)"
             unit="ms"
             metricKind="jitterVideo"
             unavailableMessage={mediaStatsUnavailable ? mediaUnavailableMessage : ""}
@@ -509,7 +533,7 @@ export default function AuditDashboard({
             timeMs={seriesTimeMs.webrtc?.downlinkKbps}
             testWallStartMs={testWallStartMs}
             label="Taxa recebida"
-            color="#34d399"
+            color="hsl(165, 82%, 55%)"
             unit="kbps"
             metricKind="downlinkKbps"
           />
@@ -519,7 +543,7 @@ export default function AuditDashboard({
             timeMs={seriesTimeMs.webrtc?.fpsIn}
             testWallStartMs={testWallStartMs}
             label="FPS vídeo (inbound)"
-            color="#fbbf24"
+            color="hsl(340, 82%, 55%)"
             unit="fps"
             metricKind="fpsIn"
             unavailableMessage={mediaStatsUnavailable ? mediaUnavailableMessage : ""}
