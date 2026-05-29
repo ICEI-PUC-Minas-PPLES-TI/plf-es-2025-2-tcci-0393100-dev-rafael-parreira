@@ -74,25 +74,32 @@ const jitsiHostButtonContains = (process.env.JITSI_HOST_BUTTON_CONTAINS || "").t
  * a conferência e os RTCPeerConnection só existem *depois* de o Meet voltar à sala.
  */
 const jitsiPostHostAuthDelayMs = Math.max(0, Number.parseInt(process.env.JITSI_POST_HOST_AUTH_DELAY_MS || "5000", 10) || 5000);
+const jitsiDisplayName = (process.env.JITSI_DISPLAY_NAME || "Stream Sentry Bot").trim();
+/**
+ * Diretório base do perfil Chrome com sessão Google salva.
+ * Cada VU recebe uma cópia em `<dir>_vu<userId>` para evitar conflitos.
+ * Primeira vez: execute com PUPPETEER_HEADFUL=1, faça login manualmente e
+ * feche o browser — o perfil fica salvo. Nas próximas execuções a sessão é reutilizada.
+ */
+const jitsiChromeProfileDir = (process.env.JITSI_CHROME_PROFILE_DIR || "").trim();
 const zoomDisplayName = (process.env.ZOOM_DISPLAY_NAME || "Stream Sentry Bot").trim();
 const zoomPasscode = (process.env.ZOOM_PASSCODE || "").trim();
 const zoomUseAccessTokenAsPasscode = process.env.ZOOM_USE_ACCESS_TOKEN_AS_PASSCODE === "1";
 const wherebyDisplayName = (process.env.WHEREBY_DISPLAY_NAME || "Stream Sentry Bot").trim();
 
 /**
- * Clicar em «Eu sou o anfitrião» abre o Google; sem completar o login ficas bloqueado.
- * Por omissão: reivindica anfitrião **só** se `JITSI_AUTH_*` e `JITSI_AUTH_ENABLED=1` (fluxo anfitrião+Google).
- * Forçar: `JITSI_CLAIM_HOST=1` (sempre tenta o botão) ou `=0` (nunca, perfil convidado).
- * `JITSI_GUEST_MODE=1` é equivalente a `JITSI_CLAIM_HOST=0` + tentar convidado/dispensar o diálogo.
+ * Clicar em «Eu sou o anfitrião» abre o formulário de login (Google ou XMPP).
+ * Padrão agora é `true` — Jitsi com secure domain sempre precisa de moderador.
+ * Para entrar apenas como convidado: JITSI_GUEST_MODE=1 ou JITSI_CLAIM_HOST=0.
  */
 const jitsiClaimHostExplicit = process.env.JITSI_CLAIM_HOST;
 const jitsiGuestModeFlag =
   process.env.JITSI_GUEST_MODE === "1" || process.env.JITSI_SKIP_I_AM_HOST === "1" || jitsiClaimHostExplicit === "0";
 const jitsiClaimHost = jitsiGuestModeFlag
   ? false
-  : jitsiClaimHostExplicit === "1" || jitsiClaimHostExplicit === "true"
-    ? true
-    : jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword;
+  : jitsiClaimHostExplicit === "0"
+    ? false
+    : true; // Padrão: sempre clica "Eu sou o anfitrião" — desactivar com JITSI_GUEST_MODE=1 ou JITSI_CLAIM_HOST=0
 
 const poolSpawnGapMs = Number.parseInt(process.env.POOL_SPAWN_GAP_MS || "600", 10);
 const poolStateDebugMs = Number.parseInt(process.env.POOL_STATE_DEBUG_MS || "0", 10);
@@ -111,6 +118,8 @@ const maxJitsiHookPages = Math.min(16, Math.max(2, Number.parseInt(process.env.J
 function buildChromiumArgs() {
   return [
     "--no-sandbox",
+    // Remove a flag navigator.webdriver que o Google usa para detectar automação
+    "--disable-blink-features=AutomationControlled",
     "--disable-extensions",
     "--disable-extensions-file-access-check",
     // Reduz iframes em processo separado (Jitsi + hook RTCPeerConnection). Opcional: PUPPETEER_PRESERVE_SITE_ISOLATION=1
@@ -268,7 +277,7 @@ async function dwellWithControls(ms, opts) {
   }
 }
 
-const accessTokenRequired = !isWhereby(apiUrl || "");
+const accessTokenRequired = !isWhereby(apiUrl || "") && !isJitsiHost(apiUrl || "") && !isZoomHost(apiUrl || "");
 if (!apiUrl || (accessTokenRequired && !accessToken) || Number.isNaN(virtualUsers)) {
   console.error("Missing required arguments: apiUrl accessToken virtualUsers");
   process.exit(1);
@@ -1216,8 +1225,43 @@ async function tryRevealJitsiLoginUIFromPage(page, userId) {
 }
 
 /** Pré-sala / cookies: percorre documento + iframes same-origin e tenta vários seletores da UI atual do Jitsi. */
-async function tryJitsiEnterConference(page) {
+async function tryJitsiEnterConference(page, displayName = "") {
+  let nameFilled = false;
+
   for (let attempt = 0; attempt < 55; attempt++) {
+    // Tenta preencher o nome de exibição nas primeiras tentativas
+    if (!nameFilled && displayName && attempt < 15) {
+      const filled = await page.evaluate((name) => {
+        const nameSelectors = [
+          '[data-testid="prejoin.displayName"]',
+          '[data-testid="displayname-input"]',
+          '#premeeting-name-input',
+          'input[id="displayName"]',
+          'input[name="displayName"]',
+          '#prejoin-display-name',
+          'input[placeholder*="name" i]',
+          'input[placeholder*="nome" i]',
+          'input[aria-label*="name" i]',
+          'input[aria-label*="nome" i]'
+        ];
+        for (const sel of nameSelectors) {
+          const input = document.querySelector(sel);
+          if (!input) continue;
+          const r = input.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) continue;
+          if (String(input.value || "").trim()) return "already-set";
+          input.focus();
+          input.value = name;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          return "filled";
+        }
+        return null;
+      }, displayName).catch(() => null);
+      if (filled === "filled") { nameFilled = true; await delay(400); }
+      else if (filled === "already-set") { nameFilled = true; }
+    }
+
     const action = await page.evaluate(() => {
       const seen = new Set();
 
@@ -1687,6 +1731,230 @@ async function tryWherebyEnterConference(page, userId) {
   return true;
 }
 
+/**
+ * Detecta o estado atual da UI do Jitsi para um dado `page`:
+ * - 'in_room'          → toolbox / leave-button visível → bot está na conferência
+ * - 'waiting_for_host' → sala vazia aguardando moderador (secure domain)
+ * - 'lobby'            → sala com lobby / knock, aguardando aprovação do anfitrião
+ * - 'prejoin'          → pré-sala (antes de clicar Entrar)
+ * - 'unknown'          → página ainda a carregar ou não identificada
+ */
+async function isJitsiInRoom(page) {
+  return page.evaluate(() => {
+    const bodyText = (document.body?.innerText || "").toLowerCase();
+
+    // --- "Waiting for host" (secure domain, sala sem moderador) ---
+    if (/waiting for the host|aguardando o anfitri|a aguardar o anfitri|esperando al anfitrión/i.test(bodyText)) {
+      return "waiting_for_host";
+    }
+    // Lobby / knock
+    const lobbyEl = document.querySelector(
+      '[data-testid="lobby.waitingMessage"], [data-testid="lobby-view"], #lobby, .lobby-view, .lobby-waiting'
+    );
+    if (lobbyEl && lobbyEl.getBoundingClientRect().width > 2) return "lobby";
+
+    // --- Dentro da reunião ---
+    // 1) Botão Leave / Sair / Hang up
+    const leaveRe = /\b(leave|hang up|sair|end call|encerrar|desligar)\b/i;
+    for (const el of document.querySelectorAll("button, [role='button']")) {
+      const txt = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.title || "").trim();
+      if (!leaveRe.test(txt)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 2 && r.height > 2) return "in_room";
+    }
+    // 2) Toolbox / barra da conferência
+    const toolbar = document.querySelector(
+      '#new-toolbox, .new-toolbox, .toolbox-content, [data-testid="Toolbar"], #toolbox, .call-controls'
+    );
+    if (toolbar && toolbar.getBoundingClientRect().width > 50) return "in_room";
+    // 3) Vídeo grande da conferência
+    const video = document.querySelector('#largeVideo, #filmstripLocalVideo, .videocontainer');
+    if (video && video.getBoundingClientRect().width > 50) return "in_room";
+
+    // --- Pré-sala ---
+    const prejoin = document.querySelector(
+      '.premeeting-screen, [data-testid="prejoin-view"], [data-testid="prejoin.joinButton"], #lobby-screen, .prejoin-input-area'
+    );
+    if (prejoin && prejoin.getBoundingClientRect().width > 2) return "prejoin";
+
+    return "unknown";
+  }).catch(() => "unknown");
+}
+
+/**
+ * Substitui o await delay fixo do login manual. Sai logo que Jitsi regresse a um estado
+ * reconhecível (pré-sala, sala, ou "aguardar anfitrião") — em vez de esperar sempre o
+ * tempo máximo mesmo quando o utilizador já fez login em poucos segundos.
+ */
+async function waitForJitsiAuthCompletion(jitsiTab, maxWaitMs, userId, emit) {
+  const pollMs = 2000;
+  let elapsed = 0;
+  while (elapsed < maxWaitMs) {
+    await delay(Math.min(pollMs, maxWaitMs - elapsed));
+    elapsed += pollMs;
+    const st = await isJitsiInRoom(jitsiTab).catch(() => "unknown");
+    if (st !== "unknown") {
+      emit({
+        type: "telemetry",
+        event: "jitsi_auth_detected_early",
+        userId,
+        elapsedMs: elapsed,
+        state: st,
+        message: `Login Google completado após ~${Math.round(elapsed / 1000)}s (estado Jitsi: ${st}). A continuar sem esperar o tempo máximo.`
+      });
+      return;
+    }
+  }
+}
+
+/**
+ * Após clicar "Eu sou o anfitrião", o Jitsi self-hosted com Firebase auth redireciona
+ * para uma página com botão "Sign in with Google" (FirebaseUI).
+ * Esta função detecta esse botão e clica nele para iniciar o fluxo Google OAuth.
+ * Retorna true se o botão foi encontrado e clicado.
+ */
+async function tryJitsiClickFirebaseGoogleButton(page, userId) {
+  const gapMs = 700;
+  const maxAttempts = 15;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const r = await page.evaluate(() => {
+      const clickIfVisible = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none") return false;
+        const r0 = el.getBoundingClientRect();
+        if (r0.width < 2 || r0.height < 2) return false;
+        el.scrollIntoView({ block: "center", inline: "center" });
+        el.click();
+        return true;
+      };
+      // FirebaseUI Google button selectors
+      for (const sel of [
+        ".firebaseui-idp-google",
+        "button.firebaseui-idp-button",
+        "[data-provider-id='google.com']",
+        "button[class*='firebaseui-idp-google']",
+        "a[class*='firebaseui-idp-google']"
+      ]) {
+        const el = document.querySelector(sel);
+        if (clickIfVisible(el)) return { clicked: true, method: sel };
+      }
+      // Generic: button/link with "Google" + sign-in text
+      for (const el of document.querySelectorAll("button, a, [role='button']")) {
+        const t = (el.textContent || "").trim();
+        const al = (el.getAttribute("aria-label") || "").trim();
+        const hay = `${t} ${al}`.toLowerCase();
+        if (t.length > 100 || !(/\bgoogle\b/.test(hay))) continue;
+        if (!(/sign\s*in|continue|entrar|usar conta|com o google/i.test(hay))) continue;
+        if (clickIfVisible(el)) return { clicked: true, method: `text:${t.slice(0, 40)}` };
+      }
+      const isFirebasePage = !!(
+        document.querySelector(".firebaseui-container") ||
+        document.querySelector("[class*='firebaseui']") ||
+        (document.body?.innerHTML || "").includes("firebaseui")
+      );
+      return { clicked: false, isFirebasePage };
+    }).catch((e) => ({ clicked: false, error: String(e?.message || e).slice(0, 80) }));
+
+    if (r?.clicked) {
+      emit({ type: "telemetry", event: "jitsi_firebase_google_click", userId,
+        ok: true, method: r.method, attempt: attempt + 1 });
+      await delay(800);
+      return true;
+    }
+    // Se passaram 3 tentativas e não é página Firebase, parar cedo
+    if (attempt >= 3 && r && !r.isFirebasePage && !r.error) break;
+    await delay(gapMs);
+  }
+  return false;
+}
+
+/**
+ * Após clicar "Sou o anfitrião", o Jitsi self-hosted abre um diálogo XMPP
+ * (username + password) na própria página — diferente do Google OAuth do meet.jit.si.
+ * Tenta preencher e submeter esse diálogo com as credenciais do .env.
+ */
+async function tryJitsiXmppLoginInDialog(page, userId) {
+  if (!jitsiAuthEnabled || !jitsiAuthEmail || !jitsiAuthPassword) return false;
+  emit({ type: "telemetry", event: "jitsi_xmpp_login", userId, phase: "start" });
+
+  const gapMs = 700;
+  const maxAttempts = 25;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const r = await page.evaluate((email, password) => {
+      const clickIfVisible = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none") return false;
+        const r0 = el.getBoundingClientRect();
+        if (r0.width < 2 || r0.height < 2) return false;
+        el.scrollIntoView({ block: "center", inline: "center" });
+        el.click();
+        return true;
+      };
+
+      const fillInput = (el, value) => {
+        if (!el) return false;
+        const r0 = el.getBoundingClientRect();
+        if (r0.width < 2 || r0.height < 2) return false;
+        el.focus();
+        el.value = "";
+        el.value = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      };
+
+      // Procura diálogo com campos username + password
+      const containers = [
+        ...document.querySelectorAll('[role="dialog"], .modal-dialog, #authenticationContainer, .auth-dialog, .jitsi-dialog, form')
+      ];
+      // Também tenta na raiz se os diálogos não forem separados
+      containers.push(document.body);
+
+      for (const d of containers) {
+        const uInput =
+          d.querySelector('input[name="username"], input[name="j_username"], input[id="username"]') ||
+          d.querySelector('input[autocomplete="username"], input[type="text"]:not([aria-hidden])') ||
+          d.querySelector('input[placeholder*="user" i], input[placeholder*="email" i], input[placeholder*="jabber" i]');
+        const pInput = d.querySelector('input[type="password"]');
+        if (!uInput || !pInput) continue;
+        if (!fillInput(uInput, email)) continue;
+        if (!fillInput(pInput, password)) continue;
+
+        // Submeter
+        const submit =
+          d.querySelector('button[type="submit"], input[type="submit"]') ||
+          d.querySelector('button.jitsi-button--primary, button.button-control, .login-button') ||
+          d.querySelector("button");
+        if (submit && clickIfVisible(submit)) return { ok: true, method: "submit_btn" };
+        // Fallback: Enter no campo de senha
+        pInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
+        pInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", keyCode: 13, bubbles: true }));
+        return { ok: true, method: "enter_key" };
+      }
+      return null;
+    }, jitsiAuthEmail, jitsiAuthPassword).catch((e) => ({ error: String(e?.message || e).slice(0, 80) }));
+
+    if (r?.ok) {
+      emit({ type: "telemetry", event: "jitsi_xmpp_login", userId, ok: true, method: r.method, attempt: attempt + 1 });
+      await delay(3000);
+      return true;
+    }
+    await delay(gapMs);
+  }
+
+  emit({
+    type: "telemetry",
+    event: "jitsi_xmpp_login",
+    userId,
+    ok: false,
+    message: "Não encontrei diálogo XMPP com username+password após " + maxAttempts + " tentativas. Confirme JITSI_AUTH_EMAIL/PASSWORD e verifique com PUPPETEER_HEADFUL=1."
+  });
+  return false;
+}
+
 function emptyWebRtcSummary() {
   return {
     peerConnections: 0,
@@ -2152,13 +2420,55 @@ async function runVirtualUser(userId, opts = {}) {
     userId
   });
 
+  // Apenas o primeiro VU (userId === 1) reivindica anfitrião e autentica.
+  // Os demais entram como convidados e aguardam o moderador abrir a sala.
+  const shouldClaimHost = jitsiClaimHost && userId === 1;
+
+  // Janela visível apenas para o VU 1 (anfitrião que precisa de login manual).
+  // VU 2+ correm em modo headless mesmo que PUPPETEER_HEADFUL=1 esteja definido.
+  const isHeadful = shouldOpenBrowser && userId === 1;
+
+  // ── Perfil Chrome persistente (Google session) para Jitsi ───────────────────
+  // JITSI_CHROME_PROFILE_DIR aponta para o perfil base salvo manualmente.
+  // Cada VU recebe uma cópia independente para evitar conflitos entre browsers.
+  let launchUserDataDir;
+  if (isJitsiHost(apiUrl) && jitsiChromeProfileDir) {
+    const perUserDir = `${jitsiChromeProfileDir}_vu${userId}`;
+    try {
+      const baseExists = fs.existsSync(jitsiChromeProfileDir);
+      const vuExists   = fs.existsSync(perUserDir);
+      if (baseExists && !vuExists) {
+        // Copia o perfil base para o diretório do VU
+        fs.cpSync(jitsiChromeProfileDir, perUserDir, { recursive: true });
+        emit({ type: "telemetry", event: "jitsi_profile_ready", userId,
+          message: `Perfil copiado de "${jitsiChromeProfileDir}" → "${perUserDir}"` });
+      } else if (!baseExists) {
+        // Perfil base não existe ainda — primeira execução
+        // Usa o diretório base diretamente para este VU criar a sessão
+        launchUserDataDir = jitsiChromeProfileDir;
+        emit({ type: "telemetry", event: "jitsi_profile_setup", userId,
+          message: `Perfil Google novo em "${jitsiChromeProfileDir}". Execute com PUPPETEER_HEADFUL=1, faça login no Google manualmente e encerre o teste. Na próxima vez a sessão será reutilizada automaticamente.` });
+      }
+      if (!launchUserDataDir) launchUserDataDir = perUserDir;
+    } catch (profErr) {
+      emit({ type: "telemetry", event: "jitsi_profile_error", userId,
+        message: String(profErr?.message || profErr).slice(0, 200) });
+    }
+  }
+
   let browser;
   try {
     browser = await puppeteer.launch({
-      headless: shouldOpenBrowser ? false : "new",
+      headless: isHeadful ? false : "new",
       acceptInsecureCerts: ignoreHttpsErrors,
       slowMo: Number.isFinite(slowMo) ? Math.max(slowMo, 0) : 0,
-      args: buildChromiumArgs()
+      ...(launchUserDataDir ? { userDataDir: launchUserDataDir } : {}),
+      args: [
+        ...buildChromiumArgs(),
+        // A janela do anfitrião (VU 1) é mutada automaticamente para evitar som contínuo da conferência.
+        // AVISO: ao remover --mute-audio, será ouvido um som extremamente alto e contínuo proveniente da conferência.
+        ...(isHeadful ? ["--mute-audio"] : [])
+      ]
     });
   } catch (err) {
     emit({
@@ -2195,6 +2505,10 @@ async function runVirtualUser(userId, opts = {}) {
 
   try {
     const page = await browser.newPage();
+    // Remove navigator.webdriver para reduzir detecção de automação pelo Google
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    }).catch(() => {});
     emit({
       type: "telemetry",
       event: "browser_ready",
@@ -2281,7 +2595,7 @@ async function runVirtualUser(userId, opts = {}) {
 
     if (isJitsiHost(apiUrl)) {
       if (jitsiDebugLoginUI) {
-        if (!shouldOpenBrowser) {
+        if (!isHeadful) {
           emit({
             type: "telemetry",
             event: "jitsi_debug_hint",
@@ -2298,7 +2612,7 @@ async function runVirtualUser(userId, opts = {}) {
         const pauseAfterReveal =
           jitsiDebugPauseMsExplicit != null
             ? jitsiDebugPauseMsExplicit
-            : shouldOpenBrowser
+            : isHeadful
               ? 90000
               : 0;
         if (pauseAfterReveal > 0) {
@@ -2333,13 +2647,10 @@ async function runVirtualUser(userId, opts = {}) {
         await delay(800);
       }
 
-      const entered = await tryJitsiEnterConference(jitsiTab);
-      emit({
-        type: "telemetry",
-        event: "jitsi_prejoin",
-        userId,
-        clickedJoin: entered
-      });
+      // Passa o display name para preencher o campo de nome na pré-sala
+      const entered = await tryJitsiEnterConference(jitsiTab, jitsiDisplayName);
+      emit({ type: "telemetry", event: "jitsi_prejoin", userId, clickedJoin: entered, displayName: jitsiDisplayName });
+
       if (!entered) {
         emit({
           type: "telemetry",
@@ -2353,61 +2664,189 @@ async function runVirtualUser(userId, opts = {}) {
           type: "telemetry",
           event: "jitsi_join_mode",
           userId,
-          claimHost: jitsiClaimHost,
-          message: jitsiClaimHost
-            ? "A tentar reivindicar anfitrião (e login Google com JITSI_AUTH_*, se ativo)"
-            : "Sem reivindicar «Sou o anfitrião» (evita abrir o Google) — a procurar convidado / dispensar diálogo. Para anfitrião automático, use JITSI_CLAIM_HOST=1 e JITSI_AUTH_ENABLED=1 com credenciais"
+          claimHost: shouldClaimHost,
+          message: shouldClaimHost
+            ? "VU 1 — a reivindicar anfitrião: tentará login XMPP (self-hosted) ou Google OAuth (meet.jit.si) conforme o diálogo que aparecer."
+            : `VU ${userId} — modo convidado: a dispensar o diálogo de anfitrião e aguardar o moderador abrir a sala.`
         });
+
         let hostAnfitriaoClicado = false;
-        if (jitsiClaimHost) {
+        if (shouldClaimHost) {
           hostAnfitriaoClicado = await tryJitsiClickAfterJoinHostButton(jitsiTab, userId);
         } else {
           await tryJitsiGuestOrDismissHostDialog(jitsiTab, userId);
         }
-        if (hostAnfitriaoClicado && (!jitsiAuthEnabled || !jitsiAuthEmail || !jitsiAuthPassword)) {
-          emit({
-            type: "telemetry",
-            event: "jitsi_hint",
-            userId,
-            message:
-              "Clicou em «Eu sou o anfitrião» — a seguir o Meet abre o Google. Enquanto o login Google não for concluído, a chamada WebRTC não começa (PeerConnections=0). Use PUPPETEER_HEADFUL=1 e termine o Google à mão, ou ative JITSI_AUTH_ENABLED=1 e credenciais. AUDIT_PAGE_DWELL_MS=45000 dá mais tempo após a sala carregar."
-          });
-        }
-        if (jitsiAuthEnabled && jitsiAuthEmail && jitsiAuthPassword && jitsiClaimHost) {
-          if (hostAnfitriaoClicado) {
-            await delay(jitsiPostHostAuthDelayMs);
+
+        if (hostAnfitriaoClicado) {
+          // Aguarda a UI de login aparecer após clicar "Eu sou o anfitrião"
+          await delay(Math.max(2000, jitsiPostHostAuthDelayMs));
+
+          // Procura página Firebase (pode ser navegação da aba principal OU popup separado)
+          let firebaseAuthPage = null;
+          for (let fi = 0; fi < 10 && !firebaseAuthPage; fi++) {
+            const allPages = await browser.pages();
+            for (const p of allPages) {
+              try {
+                const hasFirebase = await p.evaluate(() =>
+                  !!(document.querySelector(".firebaseui-container, [class*='firebaseui-idp']") ||
+                     (document.body?.innerText || "").includes("Sign in with Google") ||
+                     (document.body?.innerText || "").includes("Entrar com o Google") ||
+                     (document.body?.innerHTML || "").includes("firebaseui"))
+                ).catch(() => false);
+                if (hasFirebase) { firebaseAuthPage = p; break; }
+              } catch { /* */ }
+            }
+            if (!firebaseAuthPage) await delay(500);
           }
-          try {
-            const authPage = (await pickJitsiPageForConference(browser, apiUrl)) || jitsiTab;
-            await authPage.bringToFront().catch(() => {});
-            await tryJitsiServiceLogin(authPage, browser, userId);
-          } catch (e) {
-            emit({
-              type: "telemetry",
-              event: "jitsi_auth_result",
-              userId,
-              ok: false,
-              method: "error",
-              message: String(e?.message || e).slice(0, 200)
-            });
+
+          const authPage = firebaseAuthPage || (await pickJitsiPageForConference(browser, apiUrl)) || jitsiTab;
+          await authPage.bringToFront().catch(() => {});
+
+          // Tenta clicar em "Sign in with Google" na página Firebase
+          const firebaseClicked = await tryJitsiClickFirebaseGoogleButton(authPage, userId);
+
+          if (firebaseClicked) {
+            if (launchUserDataDir) {
+              // Chrome profile: popup Google abre e fecha sozinho (sessão salva)
+              emit({ type: "telemetry", event: "jitsi_auth_attempt", userId,
+                provider: "chrome_profile_firebase",
+                message: "Firebase + perfil Chrome — aguardando autenticação automática Google…" });
+              await delay(8000);
+              // Se o popup ainda abriu (perfil sem sessão): tratar como headful ou credenciais
+              const gPageProfile = await getGoogleSignInPage(browser, 3000);
+              if (gPageProfile) {
+                if (isHeadful) {
+                  const manualWaitMs = jitsiDebugPauseMsExplicit ?? 120000;
+                  emit({ type: "telemetry", event: "jitsi_manual_login_wait", userId, waitMs: manualWaitMs,
+                    message: `Perfil sem sessão salva. Tens ${Math.round(manualWaitMs / 1000)}s para completar o login Google manualmente na janela aberta. Ajusta com JITSI_DEBUG_PAUSE_MS=<ms>.` });
+                  await waitForJitsiAuthCompletion(jitsiTab, manualWaitMs, userId, emit);
+                }
+              }
+            } else if (isHeadful) {
+              // Headful sem perfil Chrome: pausa para login manual pelo utilizador
+              const manualWaitMs = jitsiDebugPauseMsExplicit ?? 120000;
+              emit({ type: "telemetry", event: "jitsi_manual_login_wait", userId, waitMs: manualWaitMs,
+                message: `Login manual: tens ${Math.round(manualWaitMs / 1000)}s para completar o login Google na janela do browser. Após logares, o bot continua automaticamente. Ajusta o tempo com JITSI_DEBUG_PAUSE_MS=<ms> no .env.` });
+              await waitForJitsiAuthCompletion(jitsiTab, manualWaitMs, userId, emit);
+            } else {
+              // Headless sem perfil: só pode tentar credenciais (pode ser bloqueado pelo Google)
+              const gPage = await getGoogleSignInPage(browser, 20000);
+              if (gPage && jitsiAuthEmail && jitsiAuthPassword) {
+                emit({ type: "telemetry", event: "jitsi_auth_attempt", userId, provider: "google_credentials",
+                  message: "Popup Google detectado — tentando preencher credenciais (pode ser bloqueado pelo Google)…" });
+                const r = await fillGoogleSignInPage(gPage, jitsiAuthEmail, jitsiAuthPassword);
+                emit({ type: "telemetry", event: "jitsi_auth_result", userId,
+                  ok: r === "ok" || r === "ok_maybe_already", method: "firebase_google_credentials", result: r });
+                await delay(4000);
+              } else {
+                emit({ type: "telemetry", event: "jitsi_hint", userId,
+                  message: "Firebase: clicou 'Sign in with Google' mas não há como autenticar automaticamente. " +
+                    "Use PUPPETEER_HEADFUL=1 para login manual, ou JITSI_CHROME_PROFILE_DIR para sessão salva." });
+              }
+            }
+          } else {
+            // Sem Firebase — fluxo anterior: perfil Chrome, XMPP in-page, Google OAuth
+            if (launchUserDataDir) {
+              emit({ type: "telemetry", event: "jitsi_auth_attempt", userId, provider: "chrome_profile",
+                message: "Perfil Chrome com sessão Google detectado — aguardando autenticação automática…" });
+              await delay(6000);
+            }
+
+            const xmppOk = await tryJitsiXmppLoginInDialog(authPage, userId);
+
+            if (!xmppOk) {
+              try {
+                await tryJitsiServiceLogin(authPage, browser, userId);
+              } catch (e) {
+                emit({ type: "telemetry", event: "jitsi_auth_result", userId, ok: false,
+                  method: "error", message: String(e?.message || e).slice(0, 200) });
+              }
+            }
+
+            if (!xmppOk && !launchUserDataDir && (!jitsiAuthEnabled || !jitsiAuthEmail || !jitsiAuthPassword)) {
+              emit({ type: "telemetry", event: "jitsi_hint", userId,
+                message: "Login Google não configurado. Para autenticação automática: " +
+                  "configure JITSI_CHROME_PROFILE_DIR no .env (perfil com sessão Google salva) " +
+                  "OU defina JITSI_AUTH_ENABLED=1 + JITSI_AUTH_EMAIL + JITSI_AUTH_PASSWORD." });
+            }
           }
+
           await delay(Math.max(1500, jitsiPostHostAuthDelayMs));
-        } else if (hostAnfitriaoClicado) {
-          await delay(2000);
-        } else if (!jitsiClaimHost) {
+        } else if (!shouldClaimHost) {
           await delay(2000);
         }
+
+        // Injectar hook em todas as frames/targets (Jitsi pode usar OOPIF)
         for (let wave = 0; wave < 7; wave++) {
           await delay(2000);
           await injectRtcHookEverywhere(browser);
         }
+
+        // ── Confirmação de entrada na sala ──────────────────────────────────────
+        // Semelhante ao Whereby: garante que o bot está de facto dentro da conferência
+        // e não preso em "Aguardando anfitrião" (secure domain sem moderador).
+        let jitsiRoomConfirmed = false;
         emit({
           type: "telemetry",
-          event: "jitsi_hint",
+          event: "jitsi_entering",
           userId,
-          message:
-            "Com PeerConnections=0: veja se o Meet entrou de facto na reunião (não deixou a aba de login). Aumente AUDIT_PAGE_DWELL_MS (Jitsi: 20000–45000). Pode juntar outro browser à mesma sala. net::ERR_FAILED em .wasm, blob ou chrome-extension://invalid costuma ser ruído se a UI do Meet tiver aberto."
+          message: "A verificar se entrou na conferência (isJitsiInRoom)…"
         });
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const roomState = await isJitsiInRoom(jitsiTab);
+          if (roomState === "in_room") {
+            jitsiRoomConfirmed = true;
+            emit({ type: "telemetry", event: "jitsi_entered_room", userId, attempt: attempt + 1 });
+            break;
+          }
+          if (roomState === "waiting_for_host") {
+            if (attempt % 5 === 0) {
+              emit({
+                type: "telemetry",
+                event: "jitsi_waiting_for_host",
+                userId,
+                attempt: attempt + 1,
+                message:
+                  "Sala aguardando moderador (Jitsi secure domain). Para o bot entrar como anfitrião: JITSI_CLAIM_HOST=1 + JITSI_AUTH_ENABLED=1 + JITSI_AUTH_EMAIL + JITSI_AUTH_PASSWORD no .env."
+              });
+            }
+          } else if (roomState === "lobby") {
+            if (attempt % 5 === 0) {
+              emit({
+                type: "telemetry",
+                event: "jitsi_in_lobby",
+                userId,
+                attempt: attempt + 1,
+                message: "Bot está no lobby aguardando aprovação do anfitrião."
+              });
+            }
+          } else if (roomState === "prejoin") {
+            // Após o redirect Firebase → Jitsi a pré-sala pode reaparecer — clica Entrar novamente
+            // e reinjecta o hook WebRTC para garantir captura de dados do anfitrião (VU 1).
+            if (attempt % 4 === 0) {
+              emit({
+                type: "telemetry",
+                event: "jitsi_rejoin_after_auth",
+                userId,
+                attempt: attempt + 1,
+                message: "Pré-sala detetada após autenticação — a clicar Entrar novamente."
+              });
+              await tryJitsiEnterConference(jitsiTab, jitsiDisplayName).catch(() => {});
+              await injectRtcHookEverywhere(browser);
+            }
+          }
+          await delay(1500);
+        }
+
+        if (!jitsiRoomConfirmed) {
+          const finalState = await isJitsiInRoom(jitsiTab);
+          emit({
+            type: "telemetry",
+            event: "jitsi_hint",
+            userId,
+            message: `Estado final da sala: ${finalState}. Com PeerConnections=0: verifique se o bot entrou de facto na reunião. Use PUPPETEER_HEADFUL=1 para depurar visualmente. Sala vazia com secure domain → JITSI_CLAIM_HOST=1 + credenciais.`
+          });
+        }
       }
     }
 
@@ -2662,7 +3101,7 @@ async function runVirtualUser(userId, opts = {}) {
     };
 
     // Whereby precisa de mais tempo para coletar stats WebRTC significativas (ICE + SFU + media)
-    const rtcMeetMinDwell = isWhereby(apiUrl) ? 120000 : 28000;
+    const rtcMeetMinDwell = isWhereby(apiUrl) ? 120000 : isJitsiHost(apiUrl) ? 60000 : 28000;
     const stay = Math.max(2000, isMultiPageRtcHost(apiUrl) ? Math.max(dwellMs, rtcMeetMinDwell) : dwellMs);
     await dwellWithControls(stay, { signal, getControl });
 
