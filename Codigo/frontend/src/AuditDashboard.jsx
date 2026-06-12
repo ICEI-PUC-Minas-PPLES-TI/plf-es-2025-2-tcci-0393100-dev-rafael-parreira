@@ -129,7 +129,7 @@ function WebRTCKpis({ agg, mediaStatsUnavailable }) {
     {
       label: "PeerConnections (soma)",
       value: String(agg.peerConnections),
-      info: "Soma das RTCPeerConnections detectadas nos browsers do teste."
+      info: "Soma das RTCPeerConnections detectadas nos navegadores do teste."
     },
     {
       label: "Pacotes perdidos / recebidos",
@@ -147,19 +147,19 @@ function WebRTCKpis({ agg, mediaStatsUnavailable }) {
     },
     {
       label: "Frames decodificados",
-      ...maybeUnavailable(String(agg.framesDecoded), "Quantidade de frames de vídeo recebidos e decodificados pelo browser.")
+      ...maybeUnavailable(String(agg.framesDecoded), "Quantidade de frames de vídeo recebidos e decodificados pelo navegador.")
     },
     {
       label: "Frames codificados (out)",
-      ...maybeUnavailable(String(agg.framesEncoded), "Quantidade de frames de vídeo preparados para envio pelo browser.")
+      ...maybeUnavailable(String(agg.framesEncoded), "Quantidade de frames de vídeo preparados para envio pelo navegador.")
     },
     {
-      label: "FPS entrada (último sample)",
-      ...maybeUnavailable(fmtNum(agg.fpsIn, 1), "Frames por segundo do vídeo recebido no último conjunto de métricas.")
+      label: "FPS entrada (última amostra)",
+      ...maybeUnavailable(fmtNum(agg.fpsIn, 1), "Frames por segundo do vídeo recebido na última amostra de métricas.")
     },
     {
-      label: "FPS saída (último sample)",
-      ...maybeUnavailable(fmtNum(agg.fpsOut, 1), "Frames por segundo do vídeo enviado no último conjunto de métricas.")
+      label: "FPS saída (última amostra)",
+      ...maybeUnavailable(fmtNum(agg.fpsOut, 1), "Frames por segundo do vídeo enviado na última amostra de métricas.")
     },
     {
       label: "Resolução vídeo (último)",
@@ -207,14 +207,14 @@ function WebRTCByUserTable({ lastByUser }) {
     .map(([id, s]) => ({ id, ...s }))
     .filter((r) => summaryHasWebrtcActivity(r));
   if (!rows.length) {
-    return <p className="muted-small">Nenhum RTCPeerConnection ativo nos workers (página sem WebRTC ou ainda a conectar).</p>;
+    return <p className="muted-small">Nenhuma RTCPeerConnection ativa nos workers (página sem WebRTC ou ainda conectando).</p>;
   }
   return (
     <div className="webrtc-user-table-wrap">
       <table className="webrtc-user-table">
         <thead>
           <tr>
-            <th>User</th>
+            <th>Usuário</th>
             <th>PCs</th>
             <th>RTT</th>
             <th>Jitter V</th>
@@ -472,7 +472,7 @@ export default function AuditDashboard({
           </div>
           <div className="audit-control-grid">
             <label className="control-field">
-              <span>Utilizadores virtuais (concorrência)</span>
+              <span>Usuários virtuais (concorrência)</span>
               <input
                 type="number"
                 min={1}
@@ -492,7 +492,7 @@ export default function AuditDashboard({
               </select>
             </label>
             <button type="button" className="submit btn-apply-control" onClick={onApplyControl} disabled={controlBusy}>
-              {controlBusy ? "A aplicar…" : "Aplicar alterações"}
+              {controlBusy ? "Aplicando…" : "Aplicar alterações"}
             </button>
           </div>
           {typeof onInjectChaos === "function" && (
@@ -514,9 +514,10 @@ export default function AuditDashboard({
             </div>
           )}
           <p className="muted-small control-hint">
-            Pode alterar o perfil de rede <strong>em qualquer momento</strong>: o servidor atualiza <code>control.json</code> e
-            o runner aplica CDP aos Chromium em ~1&nbsp;s. Use os atalhos ou o menu e &quot;Aplicar&quot;. Pausa congela o dwell
-            na página; utilizadores ajustam a concorrência (pool).
+            Você pode alterar o perfil de rede <strong>a qualquer momento</strong>: o servidor atualiza <code>control.json</code> e
+            o runner aplica via CDP nos Chromium em ~1&nbsp;s. Use os botões de injeção rápida ou o menu seguido de
+            &quot;Aplicar alterações&quot;. &quot;Pausar&quot; congela a permanência dos usuários na chamada; o campo
+            &quot;Usuários virtuais&quot; ajusta a concorrência do pool.
           </p>
         </div>
       )}
@@ -561,13 +562,14 @@ export default function AuditDashboard({
         <h3>WebRTC</h3>
         <p className="muted-small webrtc-intro">
           O Puppeteer intercepta <code>RTCPeerConnection</code> e amostra <code>getStats()</code> a cada poucos segundos:
-          RTP in/out, pares ICE, transporte, jitter, RTT e frames — alinhado ao que o internos do Chrome expõe.
+          RTP in/out, pares ICE, transporte, jitter, RTT e frames — alinhado ao que o <code>webrtc-internals</code> do
+          Chrome expõe.
         </p>
         <WebRTCKpis agg={webrtcAggregate} mediaStatsUnavailable={mediaStatsUnavailable} />
         <p className="muted-small webrtc-chart-note">
           {mediaStatsUnavailable
             ? "Este alvo expõe PeerConnections, RTT e bytes de transporte, mas não disponibiliza RTP/vídeo detalhado; por isso jitter, perda, frames e FPS ficam indisponíveis."
-            : "Os gráficos abaixo só desenham linhas com tráfego WebRTC (RTP, PeerConnections). As curvas de requisições HTTP estão abaixo; tráfego 200/304 do Meet não significa sozinho que a chamada de vídeo subiu."}
+            : "Os gráficos abaixo só desenham linhas quando há tráfego WebRTC real (RTP, PeerConnections). As curvas de requisições HTTP ficam na seção acima; tráfego 200/304 da página, sozinho, não significa que a chamada de vídeo subiu."}
         </p>
         <div className="audit-charts webrtc-charts">
           <TimeSeriesLineChart

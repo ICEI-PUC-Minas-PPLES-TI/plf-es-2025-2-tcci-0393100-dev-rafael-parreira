@@ -840,7 +840,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
           const phase = data.phase === "google" ? "Google (pós-join) " : data.phase === "in_page" ? "form. na página " : "";
           prependFeed({
             kind: "info",
-            text: `Jitsi: a tentar login — ${phase}JITSI_AUTH_* (env)…`,
+            text: `Jitsi: tentando login — ${phase}JITSI_AUTH_* (env)…`,
             ts: data.ts
           });
         }

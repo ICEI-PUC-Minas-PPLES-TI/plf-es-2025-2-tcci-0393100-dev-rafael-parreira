@@ -14,7 +14,7 @@ const FEATURES = [
   {
     icon: "webrtc",
     title: "WebRTC",
-    text: "RTT, jitter, FPS e bitrate agregados por utilizador virtual, alinhados ao que o browser expõe via getStats().",
+    text: "RTT, jitter, FPS e bitrate agregados por usuário virtual, alinhados ao que o browser expõe via getStats().",
     items: ["getStats()", "Por usuário", "Tempo real"]
   },
   {
@@ -32,7 +32,7 @@ const FEATURES = [
   {
     icon: "load",
     title: "Testes de carga",
-    text: "1 a 50 utilizadores virtuais simultâneos para medir concorrência, requisições e atividade por segundo.",
+    text: "1 a 50 usuários virtuais simultâneos para medir concorrência, requisições e atividade por segundo.",
     items: ["1–50 VUs", "Req/s", "Controle ao vivo"]
   }
 ];
@@ -76,11 +76,11 @@ export default function LandingPage({ onEntrar, onRegisto }) {
           <h1 className="landing-title">Teste e audite o seu tráfego em tempo real</h1>
           <p className="landing-lead">
             Telemetria de rede, amostras <code>getStats()</code> ao estilo <em>webrtc-internals</em>, stress com
-            até <strong>50 utilizadores virtuais</strong>, perfis de chaos e relatórios exportáveis — a partir de uma única consola.
+            até <strong>50 usuários virtuais</strong>, perfis de chaos e relatórios exportáveis — a partir de um único painel.
           </p>
           <ul className="landing-points">
-            <li>1 a 50 utilizadores virtuais simultâneos com Puppeteer + Chromium no servidor</li>
-            <li>Dashboard com gráficos e eixo de tempo; passe o rato para ver instantes e valores</li>
+            <li>1 a 50 usuários virtuais simultâneos com Puppeteer + Chromium no servidor</li>
+            <li>Dashboard com gráficos e eixo de tempo; passe o mouse para ver instantes e valores</li>
             <li>Histórico e exportação JSON/CSV por sessão</li>
             <li>Pausa, retomada e ajuste de concorrência durante o teste</li>
             <li>Simulação de falhas de rede: 3G lenta, alta latência, offline e modo instável (chaos)</li>
@@ -140,7 +140,7 @@ export default function LandingPage({ onEntrar, onRegisto }) {
         <span className="landing-footer-sep" aria-hidden="true">·</span>
         <span>Ferramenta de auditoria e stress WebRTC</span>
         <span className="landing-footer-sep" aria-hidden="true">·</span>
-        <span>1–50 utilizadores virtuais · Jitsi · Whereby · Zoom</span>
+        <span>1–50 usuários virtuais · Jitsi · Whereby · Zoom</span>
       </footer>
     </div>
   );

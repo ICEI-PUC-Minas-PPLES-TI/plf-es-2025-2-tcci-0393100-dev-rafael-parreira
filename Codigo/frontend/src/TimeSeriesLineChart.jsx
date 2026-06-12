@@ -71,7 +71,7 @@ function buildTags(values, kind) {
     }
   }
   if (kind === "downlinkKbps" && maxV >= (h.veryHigh || 2000)) {
-    tags.push({ key: "bw", text: "Pico de débito recebido", tone: "ok" });
+    tags.push({ key: "bw", text: "Pico de taxa recebida", tone: "ok" });
   }
   if (kind === "fpsIn" && minV < (h.veryLow || 0) && maxV > 0) {
     tags.push({ key: "fl", text: "FPS baixo nalguns momentos", tone: "warn" });
@@ -418,7 +418,7 @@ export default function TimeSeriesLineChart({
           {activeSeries.map((s) => (
             <span key={s.userId} className="chart-legend-item">
               <span className="chart-legend-dot" style={{ background: s.color }} />
-              <span className="chart-legend-label">User {s.userId}</span>
+              <span className="chart-legend-label">Usuário {s.userId}</span>
             </span>
           ))}
         </div>

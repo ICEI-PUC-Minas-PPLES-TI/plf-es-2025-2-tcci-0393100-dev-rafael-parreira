@@ -222,7 +222,7 @@ export default function App() {
     setMainView("start");
     setLiveTestRunning(false);
     setMessage(
-      "Sessão expirada ou inválida. Entre de novo. Se o erro voltar, confirme no servidor o mesmo JWT_SECRET usado no login (ex.: variável de ambiente .env) e que o token não esteja desatualizado no navegador.",
+      "Sessão expirada ou inválida. Faça login novamente. Se o erro persistir, confirme que o servidor usa o mesmo JWT_SECRET do login (variável no .env) e que não há um token antigo salvo no navegador.",
       "error"
     );
   }
@@ -258,7 +258,7 @@ export default function App() {
     setActiveTestElapsedSec(Number.isFinite(Number(status.elapsedSec)) ? Number(status.elapsedSec) : null);
     setMainView("audit");
     if (announce) {
-      setMessage("Teste em execução recuperado. Pode acompanhar e finalizar pela Auditoria.", "success");
+      setMessage("Teste em execução recuperado. Você pode acompanhar e finalizar pela aba Auditoria.", "success");
     }
   }
 
@@ -412,7 +412,7 @@ export default function App() {
     try {
       const validatedConfig = validateConfig(configForm);
       setPuppeteerLoading(true);
-      setMessage("Executando smoke test do Puppeteer...", "");
+      setMessage("Executando…oke test do Puppeteer...", "");
       setPuppeteerResult(null);
       const result = await post("/puppeteer/smoke", validatedConfig);
       setPuppeteerResult(result.result || null);
@@ -469,7 +469,7 @@ export default function App() {
         { targetVirtualUsers: auditTargetUsers, chaos: { profile: auditChaos } },
         authToken
       );
-      setMessage("Controlo do teste atualizado.", "success");
+      setMessage("Controle do teste atualizado.", "success");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
@@ -502,7 +502,7 @@ export default function App() {
     try {
       setControlBusy(true);
       await postWithAuth("/test/pause", {}, authToken);
-      setMessage("Pausa pedida — o dwell na página vai congelar.", "success");
+      setMessage("Pausa solicitada — a permanência dos usuários na chamada será congelada.", "success");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
@@ -518,7 +518,7 @@ export default function App() {
     try {
       setControlBusy(true);
       await postWithAuth("/test/resume", {}, authToken);
-      setMessage("Retomada pedida.", "success");
+      setMessage("Retomada solicitada.", "success");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
@@ -560,7 +560,7 @@ export default function App() {
       }
 
       await downloadReportBlob(`/reports/export?${params.toString()}`, authToken, name);
-      setMessage(`Relatório ${format.toUpperCase()} transferido.`, "success");
+      setMessage(`Relatório ${format.toUpperCase()} baixado.`, "success");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
@@ -575,7 +575,7 @@ export default function App() {
   async function handleOpenHistoricalAudit(sessionId) {
     try {
       setHistoricalAuditLoading(true);
-      setMessage("A carregar auditoria histórica…", "");
+      setMessage("Carregando auditoria histórica…", "");
       const data = await getWithAuth(`/reports/session/${encodeURIComponent(sessionId)}`, authToken);
       const snapshot = buildTelemetrySnapshotFromEvents(data.events || [], data.session || { id: sessionId });
       setHistoricalAudit({ session: data.session || { id: sessionId }, snapshot });
@@ -598,7 +598,7 @@ export default function App() {
       setTestStopping(true);
       await postWithAuth("/test/stop", {}, authToken);
       markTestFinished();
-      setMessage("Teste a encerrar (Chromium e Puppeteer vão fechar).", "success");
+      setMessage("Encerrando teste — o Chromium e o Puppeteer serão fechados.", "success");
     } catch (error) {
       if (error.unauthorized) {
         handleSessionInvalid();
@@ -667,7 +667,7 @@ export default function App() {
                 setMessage("");
               }}
             >
-              Registro
+              Cadastro
             </button>
           </div>
 
@@ -775,7 +775,7 @@ export default function App() {
                     disabled={testStopping}
                     title="Cancela o processo Node/Puppeteer no servidor"
                   >
-                    {testStopping ? "A encerrar…" : "Finalizar teste"}
+                    {testStopping ? "Encerrando…" : "Finalizar teste"}
                   </button>
                 )}
                 <button type="button" className="btn-header-logout" onClick={handleLogout}>
@@ -791,7 +791,7 @@ export default function App() {
             <>
               <p className="config-intro">
                 Defina a URL alvo, o token Bearer enviado nas requisições e quantos usuários virtuais o Puppeteer irá
-                simular em lotes. Também pode usar salas WebRTC como Jitsi ou Whereby; nesses domínios o token é opcional.
+                simular. Você também pode usar salas WebRTC como Jitsi ou Whereby; nesses domínios o token é opcional.
               </p>
               <div className="example-box">
                 <p>Exemplo rápido para testar:</p>
@@ -886,7 +886,7 @@ export default function App() {
                     required
                   />
                   <p className="muted-small">
-                    Com o servidor em modo pool, este valor define a concorrência inicial; pode ajustar durante o teste na
+                    Com o servidor em modo pool, este valor define a concorrência inicial; você pode ajustá-la durante o teste na aba
                     Auditoria.
                   </p>
                   <label htmlFor="start-call-duration">Duração da chamada (segundos)</label>
@@ -964,7 +964,7 @@ export default function App() {
                     Salvar configurações
                   </button>
                   <button className="ghost" type="button" onClick={handlePuppeteerSmoke} disabled={puppeteerLoading}>
-                    {puppeteerLoading ? "Executando..." : "Testar Puppeteer"}
+                    {puppeteerLoading ? "Executando…" : "Testar Puppeteer"}
                   </button>
                   <button
                     type="button"
@@ -972,7 +972,7 @@ export default function App() {
                     onClick={handleStopTest}
                     disabled={testStopping || !liveTestRunning}
                   >
-                    {testStopping ? "A encerrar…" : "Finalizar teste"}
+                    {testStopping ? "Encerrando…" : "Finalizar teste"}
                   </button>
                 </div>
               </form>
@@ -1000,7 +1000,7 @@ export default function App() {
             <>
               <p className="subtitle">Histórico de testes e relatórios</p>
               <p className="config-intro">
-                Cada teste gera um ficheiro NDJSON no servidor com <strong>todos os eventos</strong> (rede, WebRTC,
+                Cada teste gera um arquivo NDJSON no servidor com <strong>todos os eventos</strong> (rede, WebRTC,
                 latências). O resumo agrega contagens HTTP, estatísticas RTT/jitter e uma série temporal de latência.
                 Use as exportações detalhadas para análise completa ou por sessão.
               </p>
@@ -1011,7 +1011,7 @@ export default function App() {
                   disabled={reportBusy}
                   onClick={() => handleDownloadReport("json")}
                 >
-                  {reportBusy ? "A preparar…" : "JSON (resumo)"}
+                  {reportBusy ? "Preparando…" : "JSON (resumo)"}
                 </button>
                 <button
                   type="button"
@@ -1019,20 +1019,20 @@ export default function App() {
                   disabled={reportBusy}
                   onClick={() => handleDownloadReport("csv")}
                 >
-                  CSV (resumo alargado)
+                  CSV (resumo ampliado)
                 </button>
                 <button
                   type="button"
                   className="ghost"
                   disabled={reportBusy}
-                  title="Todas as sessões com eventos completos (pode ser um ficheiro grande)"
+                  title="Todas as sessões com eventos completos (pode ser um arquivo grande)"
                   onClick={() => handleDownloadReport("json", { includeEvents: true })}
                 >
                   JSON completo (todas)
                 </button>
               </div>
               {historyLoading ? (
-                <p className="muted-small">A carregar histórico…</p>
+                <p className="muted-small">Carregando histórico…</p>
               ) : (
                 <div className="history-table-wrap">
                   <table className="history-table">
@@ -1045,7 +1045,7 @@ export default function App() {
                         <th>RTT médio</th>
                         <th>HTTP req</th>
                         <th>WebRTC amostras</th>
-                        <th>Estado</th>
+                        <th>Status</th>
                         <th>Ações</th>
                       </tr>
                     </thead>

@@ -2667,8 +2667,8 @@ async function runVirtualUser(userId, opts = {}) {
           userId,
           claimHost: shouldClaimHost,
           message: shouldClaimHost
-            ? "VU 1 — a reivindicar anfitrião: tentará login XMPP (self-hosted) ou Google OAuth (meet.jit.si) conforme o diálogo que aparecer."
-            : `VU ${userId} — modo convidado: a dispensar o diálogo de anfitrião e aguardar o moderador abrir a sala.`
+            ? "VU 1 — reivindicando anfitrião: tentará login XMPP (self-hosted) ou Google OAuth (meet.jit.si) conforme o diálogo que aparecer."
+            : `VU ${userId} — modo convidado: dispensando o diálogo de anfitrião e aguardando o moderador abrir a sala.`
         });
 
         let hostAnfitriaoClicado = false;
