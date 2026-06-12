@@ -1,11 +1,12 @@
 backend/.env
-backend/stream-sentry-users.json
-backend/stream-sentry-test-history.json
+backend/*.exe
+backend/*.log
 backend/puppeteer/control.json
 backend/puppeteer/reports/
-backend/*.exe
+backend/puppeteer/artifacts/
 backend/puppeteer/node_modules/
 
 frontend/.env
+frontend/*.log
 frontend/node_modules/
 frontend/dist/

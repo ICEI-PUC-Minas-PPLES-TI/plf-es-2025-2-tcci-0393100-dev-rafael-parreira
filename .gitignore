@@ -1,0 +1,7 @@
+# IDEs e ferramentas locais
+.idea/
+.vscode/
+.claude/
+
+# Logs de execução
+*.log

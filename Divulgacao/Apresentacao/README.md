@@ -1,4 +1,7 @@
 # Divulgação: Apresentação do Projeto
 
-Nesta pasta inclua arquivos de slides que foram produzidos para apresentações do projeto e de seus resultados.
+Slides produzidos para as apresentações do Stream Sentry.
 
+## Conteúdo
+
+- **Slides.pdf** — Apresentação do projeto: contexto, problema, objetivos, arquitetura da solução e demonstração das funcionalidades.
