@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"crypto/rand"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,32 +37,14 @@ type user struct {
 	PasswordHash string `json:"-"`
 }
 
-type userRow struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
-	Email        string `json:"email"`
-	PasswordHash string `json:"password_hash"`
-}
-
-// usersSnapshot is the on-disk format (password hash included).
-type usersSnapshot struct {
-	NextID int       `json:"next_id"`
-	Users  []userRow `json:"users"`
-}
-
 type authServer struct {
-	jwtSecret      []byte
-	users          []user
-	nextID         int
-	mu             sync.RWMutex
-	testMu         sync.Mutex
-	testRunning    bool
-	testCancel     context.CancelFunc // cancela o contexto do exec do audit (finalizar teste)
-	testSessionID  string
-	testStartedAt  time.Time
-	testUsers      int
-	usersStorePath string
-	persistToDisk  bool
+	jwtSecret     []byte
+	testMu        sync.Mutex
+	testRunning   bool
+	testCancel    context.CancelFunc
+	testSessionID string
+	testStartedAt time.Time
+	testUsers     int
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -110,74 +94,6 @@ func (h *telemetryHub) broadcast(message []byte) {
 	}
 }
 
-func usersStoreConfigFromEnv() (path string, persist bool) {
-	raw := strings.TrimSpace(os.Getenv("USERS_FILE"))
-	if strings.EqualFold(raw, "off") || raw == "-" {
-		return "", false
-	}
-	if raw == "" {
-		return "stream-sentry-users.json", true
-	}
-	return raw, true
-}
-
-func (s *authServer) loadUsersFromDisk() error {
-	if !s.persistToDisk || s.usersStorePath == "" {
-		return nil
-	}
-	data, err := os.ReadFile(s.usersStorePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var snap usersSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.users = make([]user, 0, len(snap.Users))
-	for _, row := range snap.Users {
-		s.users = append(s.users, user{
-			ID:           row.ID,
-			Name:         row.Name,
-			Email:        row.Email,
-			PasswordHash: row.PasswordHash,
-		})
-	}
-	s.nextID = snap.NextID
-	if s.nextID < 1 {
-		s.nextID = 1
-	}
-	// Garante nextID acima do maior id carregado (arquivo antigo/corrompido).
-	for _, u := range s.users {
-		if u.ID >= s.nextID {
-			s.nextID = u.ID + 1
-		}
-	}
-	return nil
-}
-
-// Caller must hold s.mu (write lock).
-func (s *authServer) saveUsersLocked() error {
-	if !s.persistToDisk || s.usersStorePath == "" {
-		return nil
-	}
-	var snap usersSnapshot
-	snap.NextID = s.nextID
-	for _, u := range s.users {
-		snap.Users = append(snap.Users, userRow{
-			ID: u.ID, Name: u.Name, Email: u.Email, PasswordHash: u.PasswordHash,
-		})
-	}
-	data, err := json.MarshalIndent(snap, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.usersStorePath, data, 0o600)
-}
 
 func main() {
 	_ = godotenv.Load()
@@ -188,19 +104,17 @@ func main() {
 		secret = "dev_secret_only"
 	}
 
-	storePath, persist := usersStoreConfigFromEnv()
+	if err := connectMongoDB(); err != nil {
+		log.Fatalf("MongoDB: falha ao conectar: %v", err)
+	}
+	defer disconnectMongoDB()
+
+	idxCtx, idxCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ensureIndexes(idxCtx)
+	idxCancel()
+
 	server := &authServer{
-		jwtSecret:      []byte(secret),
-		users:          make([]user, 0),
-		nextID:         1,
-		usersStorePath: storePath,
-		persistToDisk:  persist,
-	}
-	if err := server.loadUsersFromDisk(); err != nil {
-		log.Printf("aviso: não foi possível carregar usuários de %q: %v", storePath, err)
-	}
-	if persist {
-		log.Printf("persistência de usuários: %s (defina USERS_FILE=off para desligar)", storePath)
+		jwtSecret: []byte(secret),
 	}
 
 	mux := http.NewServeMux()
@@ -220,6 +134,7 @@ func main() {
 	mux.HandleFunc("GET /reports/export", server.handleExportReports)
 	mux.HandleFunc("GET /ws/telemetry", server.handleWSTelemetry)
 	mux.HandleFunc("POST /platform/whereby/create-room", server.handleWherebyCreateRoom)
+	mux.HandleFunc("POST /platform/jitsi/room-url", server.handleJitsiRoomUrl)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("Stream Sentry Auth API (Go) running on %s", addr)
@@ -282,36 +197,30 @@ func (s *authServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, existing := range s.users {
-		if existing.Email == email {
-			writeJSON(w, http.StatusConflict, map[string]string{"message": "email already in use"})
-			return
-		}
-	}
-
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to encrypt password"})
 		return
 	}
 
-	newUser := user{
-		ID:           s.nextID,
-		Name:         name,
-		Email:        email,
-		PasswordHash: string(passwordHash),
-	}
-	s.nextID++
-	s.users = append(s.users, newUser)
-
-	if err := s.saveUsersLocked(); err != nil {
-		log.Printf("persist users: %v", err)
+	ctx := r.Context()
+	newID, err := nextUserID(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to generate user id"})
+		return
 	}
 
-	token, err := s.generateToken(newUser)
+	doc := userDoc{ID: newID, Name: name, Email: email, PasswordHash: string(passwordHash)}
+	if err := dbCreateUser(ctx, doc); err != nil {
+		if errors.Is(err, errEmailTaken) {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "email already in use"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to create user"})
+		return
+	}
+
+	token, err := s.generateToken(user{ID: doc.ID, Name: doc.Name, Email: doc.Email})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to generate token"})
 		return
@@ -320,11 +229,7 @@ func (s *authServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"message": "user registered successfully",
 		"token":   token,
-		"user": map[string]any{
-			"id":    newUser.ID,
-			"name":  newUser.Name,
-			"email": newUser.Email,
-		},
+		"user":    map[string]any{"id": doc.ID, "name": doc.Name, "email": doc.Email},
 	})
 }
 
@@ -347,20 +252,12 @@ func (s *authServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cópia por valor: evita ponteiro para elemento de slice (inválido após append em outra goroutine).
-	s.mu.RLock()
-	var found user
-	var have bool
-	for _, u := range s.users {
-		if u.Email == email {
-			found = u
-			have = true
-			break
-		}
+	found, err := dbFindUserByEmail(r.Context(), email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "database error"})
+		return
 	}
-	s.mu.RUnlock()
-
-	if !have {
+	if found == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid credentials"})
 		return
 	}
@@ -370,7 +267,8 @@ func (s *authServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.generateToken(found)
+	u := user{ID: found.ID, Name: found.Name, Email: found.Email}
+	token, err := s.generateToken(u)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to generate token"})
 		return
@@ -379,11 +277,7 @@ func (s *authServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "login successful",
 		"token":   token,
-		"user": map[string]any{
-			"id":    found.ID,
-			"name":  found.Name,
-			"email": found.Email,
-		},
+		"user":    map[string]any{"id": u.ID, "name": u.Name, "email": u.Email},
 	})
 }
 
@@ -394,22 +288,19 @@ func (s *authServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, existing := range s.users {
-		if existing.ID == userID {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"user": map[string]any{
-					"id":    existing.ID,
-					"name":  existing.Name,
-					"email": existing.Email,
-				},
-			})
-			return
-		}
+	found, err := dbFindUserByID(r.Context(), userID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "database error"})
+		return
+	}
+	if found == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "user not found"})
+		return
 	}
 
-	writeJSON(w, http.StatusNotFound, map[string]string{"message": "user not found"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": map[string]any{"id": found.ID, "name": found.Name, "email": found.Email},
+	})
 }
 
 func (s *authServer) handlePuppeteerSmoke(w http.ResponseWriter, r *http.Request) {
@@ -522,8 +413,11 @@ func (s *authServer) replayActiveTelemetry(conn *websocket.Conn) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	replayedStart := false
-	if events, err := loadNDJSONEventLines(sessionTelemetryNDJSONPath(sessionID)); err == nil {
+	if events, err := dbLoadSessionEvents(ctx, sessionID); err == nil {
 		for _, raw := range events {
 			var msg map[string]any
 			if !replayedStart && json.Unmarshal(raw, &msg) == nil && msg["event"] == "test_start" {
@@ -562,10 +456,12 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type request struct {
-		APIURL       string            `json:"apiUrl"`
-		AccessToken  string            `json:"accessToken"`
-		VirtualUsers int               `json:"virtualUsers"`
-		Chaos        *chaosProfileJSON `json:"chaos,omitempty"`
+		APIURL          string            `json:"apiUrl"`
+		AccessToken     string            `json:"accessToken"`
+		VirtualUsers    int               `json:"virtualUsers"`
+		Headful         bool              `json:"headful"`
+		CallDurationSec int               `json:"callDurationSec"`
+		Chaos           *chaosProfileJSON `json:"chaos,omitempty"`
 	}
 
 	var payload request
@@ -582,6 +478,15 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 	apiURL := strings.TrimSpace(payload.APIURL)
 	token := strings.TrimSpace(payload.AccessToken)
 	users := payload.VirtualUsers
+
+	callDurationSec := payload.CallDurationSec
+	if callDurationSec == 0 {
+		callDurationSec = 90
+	}
+	if callDurationSec < 90 || callDurationSec > 1800 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "callDurationSec must be between 90 and 1800"})
+		return
+	}
 
 	cp := chaosProfileJSON{Profile: "off"}
 	if payload.Chaos != nil && strings.TrimSpace(payload.Chaos.Profile) != "" {
@@ -630,7 +535,7 @@ func (s *authServer) handleTestStart(w http.ResponseWriter, r *http.Request) {
 		log.Printf("aviso: escrever control.json: %v", err)
 	}
 
-	go s.runAuditTest(apiURL, token, users, sessionID, startedAt)
+	go s.runAuditTest(apiURL, token, users, sessionID, startedAt, payload.Headful, callDurationSec)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"message":   "test started; connect to WebSocket /ws/telemetry for live audit",
@@ -706,9 +611,13 @@ func (s *authServer) handleTestStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "teste em encerramento"})
 }
 
-func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int, sessionID string, startedAt time.Time) {
+func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUsers int, sessionID string, startedAt time.Time, headful bool, callDurationSec int) {
 	ctx, cancel := context.WithCancel(context.Background())
-	timer := time.AfterFunc(25*time.Minute, func() { cancel() })
+	// Tempo extra para os usuários virtuais entrarem na chamada antes da contagem
+	// da duração configurada começar (run-audit.mjs só inicia o dwell após o join).
+	const joinBuffer = 5 * time.Minute
+	maxDuration := time.Duration(callDurationSec)*time.Second + joinBuffer
+	timer := time.AfterFunc(maxDuration, func() { cancel() })
 
 	s.testMu.Lock()
 	s.testCancel = cancel
@@ -735,11 +644,24 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		accessToken,
 		strconv.Itoa(virtualUsers),
 	)
-	cmd.Env = append(os.Environ(),
+	headfulValue := "0"
+	if headful {
+		headfulValue = "1"
+	}
+	env := make([]string, 0, len(os.Environ())+6)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "PUPPETEER_HEADFUL=") || strings.HasPrefix(kv, "AUDIT_PAGE_DWELL_MS=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	cmd.Env = append(env,
 		"TEST_SESSION_ID="+sessionID,
 		"TEST_STARTED_AT="+startedAt.UTC().Format(time.RFC3339Nano),
 		"STREAM_SENTRY_POOL=1",
 		"STREAM_SENTRY_WORKER_THREADS=1",
+		"PUPPETEER_HEADFUL="+headfulValue,
+		"AUDIT_PAGE_DWELL_MS="+strconv.Itoa(callDurationSec*1000),
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -761,19 +683,8 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 	buffer := make([]byte, 0, 256*1024)
 	scanner.Buffer(buffer, 1024*1024)
 
-	reportPath := sessionTelemetryNDJSONPath(sessionID)
-	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
-		log.Printf("aviso: criar pasta de relatórios: %v", err)
-	}
-	repFile, repErr := os.OpenFile(reportPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if repErr != nil {
-		log.Printf("aviso: abrir ficheiro de telemetria NDJSON: %v", repErr)
-	}
-	if repFile != nil {
-		defer repFile.Close()
-	}
-
 	rollup := newRollupAccumulator()
+	var seq int
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -782,13 +693,10 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		}
 		copyLine := append([]byte(nil), line...)
 		globalHub.broadcast(copyLine)
-		if repFile != nil {
-			if _, werr := repFile.Write(line); werr != nil {
-				log.Printf("aviso: escrever relatório: %v", werr)
-			} else {
-				_, _ = repFile.Write([]byte("\n"))
-			}
+		if err := dbInsertTelemetryEvent(context.Background(), sessionID, seq, copyLine); err != nil {
+			log.Printf("aviso: inserir evento telemetria no MongoDB: %v", err)
 		}
+		seq++
 		rollup.FeedLine(line)
 	}
 
@@ -802,17 +710,15 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 	dur := endedAt.Sub(startedAt).Seconds()
 
 	rec := TestHistoryRecord{
-		ID:           sessionID,
-		StartedAt:    startedAt,
-		EndedAt:      endedAt,
-		DurationSec:  dur,
-		APIURL:       apiURL,
-		VirtualUsers: virtualUsers,
-		ExitOK:       waitErr == nil,
-		Summary:      rollup.ToSummary(),
-	}
-	if repFile != nil {
-		rec.TelemetryFile = filepath.ToSlash(filepath.Join("puppeteer", "reports", sessionID+".ndjson"))
+		ID:            sessionID,
+		StartedAt:     startedAt,
+		EndedAt:       endedAt,
+		DurationSec:   dur,
+		APIURL:        apiURL,
+		VirtualUsers:  virtualUsers,
+		ExitOK:        waitErr == nil,
+		TelemetryFile: "mongodb",
+		Summary:       rollup.ToSummary(),
 	}
 	if ctrl, err := readAuditControl(); err == nil {
 		rec.ChaosProfile = strings.TrimSpace(ctrl.Chaos.Profile)
@@ -825,7 +731,9 @@ func (s *authServer) runAuditTest(apiURL string, accessToken string, virtualUser
 		b, _ := json.Marshal(map[string]any{"type": "telemetry", "event": "error", "message": waitErr.Error()})
 		globalHub.broadcast(b)
 	}
-	appendTestHistory(rec)
+	if err := dbAppendTestHistory(context.Background(), rec); err != nil {
+		log.Printf("aviso: guardar histórico no MongoDB: %v", err)
+	}
 
 	summary, _ := json.Marshal(map[string]any{
 		"type":         "telemetry",
@@ -923,7 +831,12 @@ func validateTechnicalConfig(apiURL string, accessToken string, virtualUsers int
 
 	h := strings.ToLower(parsedURL.Hostname())
 	isWhereby := h == "whereby.com" || strings.HasSuffix(h, ".whereby.com")
-	if !isWhereby && strings.TrimSpace(accessToken) == "" {
+	isJitsi := h == "meet.jit.si" || strings.HasSuffix(h, ".jit.si") ||
+		strings.Contains(h, "8x8.vc") || strings.Contains(h, "jitsi")
+	isZoom := h == "zoom.us" || strings.HasSuffix(h, ".zoom.us") ||
+		h == "zoom.com" || strings.HasSuffix(h, ".zoom.com")
+	tokenOptional := isWhereby || isJitsi || isZoom
+	if !tokenOptional && strings.TrimSpace(accessToken) == "" {
 		return errors.New("accessToken is required")
 	}
 
@@ -1022,5 +935,37 @@ func (s *authServer) handleWherebyCreateRoom(w http.ResponseWriter, r *http.Requ
 		"meetingId":   meetingId,
 		"endDate":     wherebyResp["endDate"],
 		"hint":        "Use roomUrl para participantes e hostRoomUrl para o anfitrião. Passe roomUrl como apiUrl no /test/start.",
+	})
+}
+
+// POST /platform/jitsi/room-url
+// Gera uma URL de sala Jitsi aleatória usando o servidor configurado em JITSI_BASE_URL.
+// Não requer nenhuma API externa — salas Jitsi são criadas automaticamente na primeira visita.
+func (s *authServer) handleJitsiRoomUrl(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
+		return
+	}
+
+	baseURL := strings.TrimSpace(os.Getenv("JITSI_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://meet.jit.si"
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	// Gera nome de sala aleatório: "ss-" + 8 bytes hex → ex.: ss-1a2b3c4d5e6f7a8b
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "erro ao gerar nome de sala"})
+		return
+	}
+	roomName := "ss-" + hex.EncodeToString(b)
+	roomUrl := baseURL + "/" + roomName
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"roomUrl":  roomUrl,
+		"roomName": roomName,
+		"baseUrl":  baseURL,
+		"hint":     "Sala gerada com nome aleatório. Configure JITSI_BASE_URL no .env para usar seu servidor próprio (padrão: meet.jit.si).",
 	})
 }

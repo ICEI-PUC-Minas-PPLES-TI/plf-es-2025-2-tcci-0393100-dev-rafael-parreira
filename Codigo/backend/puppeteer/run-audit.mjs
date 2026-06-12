@@ -2426,7 +2426,8 @@ async function runVirtualUser(userId, opts = {}) {
 
   // Janela visível apenas para o VU 1 (anfitrião que precisa de login manual).
   // VU 2+ correm em modo headless mesmo que PUPPETEER_HEADFUL=1 esteja definido.
-  const isHeadful = shouldOpenBrowser && userId === 1;
+  // No Jitsi, a aba do VU 1 sempre aparece (login manual), independentemente do modo headless escolhido.
+  const isHeadful = userId === 1 && (shouldOpenBrowser || isJitsiHost(apiUrl));
 
   // ── Perfil Chrome persistente (Google session) para Jitsi ───────────────────
   // JITSI_CHROME_PROFILE_DIR aponta para o perfil base salvo manualmente.
@@ -3100,9 +3101,12 @@ async function runVirtualUser(userId, opts = {}) {
       }
     };
 
-    // Whereby precisa de mais tempo para coletar stats WebRTC significativas (ICE + SFU + media)
-    const rtcMeetMinDwell = isWhereby(apiUrl) ? 120000 : isJitsiHost(apiUrl) ? 60000 : 28000;
-    const stay = Math.max(2000, isMultiPageRtcHost(apiUrl) ? Math.max(dwellMs, rtcMeetMinDwell) : dwellMs);
+    // Sinaliza que este VU entrou na chamada e está pronto — usado pelo frontend para
+    // só iniciar a contagem da "duração da chamada" quando todos os VUs tiverem entrado.
+    emit({ type: "telemetry", event: "user_joined", userId });
+
+    // Respeita a duração de chamada configurada pelo usuário (AUDIT_PAGE_DWELL_MS).
+    const stay = Math.max(2000, dwellMs);
     await dwellWithControls(stay, { signal, getControl });
 
     emit({
@@ -3151,6 +3155,9 @@ const chaosTicker = setInterval(() => {
 }, Math.max(250, chaosPollMs));
 
 let poolShuttingDown = false;
+/** Drenagem: quando um VU completa a chamada (user_done), o pool deixa de repor
+ *  utilizadores e o teste termina assim que os restantes saírem da chamada. */
+let poolDrainMode = false;
 function requestPoolShutdown() {
   poolShuttingDown = true;
 }
@@ -3171,9 +3178,16 @@ function startVirtualUserWorker(userId) {
 
   let settled = false;
   let requestedStop = false;
+  const flags = { userDone: false };
   const done = new Promise((resolve) => {
     worker.on("message", (msg) => {
       if (msg?.kind === "telemetry" && msg.payload) {
+        if (msg.payload.event === "user_done") {
+          flags.userDone = true;
+          // Dispara a drenagem já na mensagem: o worker pode demorar (ou falhar) a sair,
+          // e o fim do dwell é o sinal de que a duração da chamada foi atingida.
+          if (!poolShuttingDown) poolDrainMode = true;
+        }
         writeTelemetryPayload(msg.payload);
       }
     });
@@ -3209,7 +3223,7 @@ function startVirtualUserWorker(userId) {
     if (typeof killTimer.unref === "function") killTimer.unref();
   };
 
-  return { worker, done, stop };
+  return { worker, done, stop, flags };
 }
 
 async function runVirtualUserInWorkerThread() {
@@ -3237,6 +3251,8 @@ async function runPoolSupervisor() {
   const inflight = new Map();
   let nextId = 0;
   let lastPoolStateEmit = 0;
+  let drainAnnounced = false;
+  let drainStartedAt = 0;
   const spawnGap = Math.max(0, Number.isFinite(poolSpawnGapMs) ? poolSpawnGapMs : 600);
 
   while (true) {
@@ -3263,6 +3279,32 @@ async function runPoolSupervisor() {
       });
     }
 
+    // Chamada concluída por um VU: não repor utilizadores; terminar quando todos saírem.
+    if (poolDrainMode) {
+      if (!drainAnnounced) {
+        drainAnnounced = true;
+        drainStartedAt = Date.now();
+        emit({
+          type: "telemetry",
+          event: "pool_draining",
+          message: "Duração da chamada atingida — aguardando os demais usuários saírem para finalizar o teste."
+        });
+      }
+      if (inflight.size === 0) break;
+      // Tolerância: VUs presos não podem segurar o teste para sempre.
+      if (Date.now() - drainStartedAt > 90000) {
+        for (const [, w] of inflight) {
+          w.stop?.();
+          w.ac?.abort();
+          await w.browser?.close().catch(() => {});
+        }
+        inflight.clear();
+        break;
+      }
+      await delay(500);
+      continue;
+    }
+
     const ids = [...inflight.keys()].sort((a, b) => b - a);
     while (inflight.size > want && ids.length) {
       const id = ids.shift();
@@ -3274,7 +3316,7 @@ async function runPoolSupervisor() {
       inflight.delete(id);
     }
 
-    while (inflight.size < want && !poolShuttingDown) {
+    while (inflight.size < want && !poolShuttingDown && !poolDrainMode) {
       nextId += 1;
       const id = nextId;
       if (useWorkerThreads) {
@@ -3282,6 +3324,7 @@ async function runPoolSupervisor() {
         inflight.set(id, entry);
         void entry.done.finally(() => {
           inflight.delete(id);
+          if (entry.flags?.userDone && !poolShuttingDown) poolDrainMode = true;
         });
       } else {
         const ac = new AbortController();
@@ -3294,6 +3337,9 @@ async function runPoolSupervisor() {
             entry.browser = b;
           }
         })
+          .then(() => {
+            if (!poolShuttingDown) poolDrainMode = true;
+          })
           .catch((err) => {
             console.error("runVirtualUser", id, err);
             emit({
@@ -3359,4 +3405,8 @@ if (isMainThread) {
 } else {
   await runVirtualUserInWorkerThread();
   clearInterval(chaosTicker);
+  // O listener do parentPort mantém o event loop do worker vivo; sair explicitamente
+  // para que o supervisor (entry.done) detecte o fim do VU.
+  await delay(150);
+  process.exit(0);
 }

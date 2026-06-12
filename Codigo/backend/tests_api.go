@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -42,52 +41,10 @@ type auditControlFile struct {
 	Chaos              chaosProfileJSON `json:"chaos"`
 }
 
-var (
-	controlFileMu  sync.Mutex
-	testsHistoryMu sync.Mutex
-)
-
-func testsHistoryPath() string {
-	if p := strings.TrimSpace(os.Getenv("TESTS_HISTORY_FILE")); p != "" {
-		return p
-	}
-	return "stream-sentry-test-history.json"
-}
+var controlFileMu sync.Mutex
 
 func controlFilePath() string {
 	return filepath.Join("puppeteer", "control.json")
-}
-
-func telemetryReportsDir() string {
-	if p := strings.TrimSpace(os.Getenv("TELEMETRY_REPORTS_DIR")); p != "" {
-		return p
-	}
-	return filepath.Join("puppeteer", "reports")
-}
-
-func sessionTelemetryNDJSONPath(sessionID string) string {
-	return filepath.Join(telemetryReportsDir(), sessionID+".ndjson")
-}
-
-func loadNDJSONEventLines(path string) ([]json.RawMessage, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	lines := bytes.Split(raw, []byte("\n"))
-	out := make([]json.RawMessage, 0, len(lines))
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		// validar JSON
-		if !json.Valid(line) {
-			continue
-		}
-		out = append(out, json.RawMessage(append([]byte(nil), line...)))
-	}
-	return out, nil
 }
 
 func newSessionID() string {
@@ -164,58 +121,12 @@ func mergeWriteAuditControl(patch map[string]any) error {
 	return os.WriteFile(controlFilePath(), raw, 0o644)
 }
 
-func appendTestHistory(rec TestHistoryRecord) {
-	testsHistoryMu.Lock()
-	defer testsHistoryMu.Unlock()
-
-	path := testsHistoryPath()
-	var list []TestHistoryRecord
-	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
-		_ = json.Unmarshal(raw, &list)
-	}
-	list = append(list, rec)
-	raw, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(path, raw, 0o600)
-}
-
-func loadTestHistory() ([]TestHistoryRecord, error) {
-	path := testsHistoryPath()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []TestHistoryRecord{}, nil
-		}
-		return nil, err
-	}
-	var list []TestHistoryRecord
-	if len(raw) == 0 {
-		return list, nil
-	}
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, err
-	}
-	return list, nil
-}
-
-func findSessionRecord(list []TestHistoryRecord, id string) *TestHistoryRecord {
-	id = strings.TrimSpace(id)
-	for i := range list {
-		if list[i].ID == id {
-			return &list[i]
-		}
-	}
-	return nil
-}
-
 func (s *authServer) handleGetTestHistory(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
 		return
 	}
-	list, err := loadTestHistory()
+	list, err := dbLoadTestHistory(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 		return
@@ -223,7 +134,7 @@ func (s *authServer) handleGetTestHistory(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"items": list})
 }
 
-// handleGetSessionReportDetail GET /reports/session/{id} — metadados + todos os eventos NDJSON parseados.
+// handleGetSessionReportDetail GET /reports/session/{id} — metadados + todos os eventos da sessão.
 func (s *authServer) handleGetSessionReportDetail(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.validateBearerToken(r.Header.Get("Authorization")); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
@@ -234,24 +145,22 @@ func (s *authServer) handleGetSessionReportDetail(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "id da sessão em falta"})
 		return
 	}
-	list, err := loadTestHistory()
+	rec, err := dbFindTestHistoryRecord(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 		return
 	}
-	rec := findSessionRecord(list, id)
 	if rec == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "sessão não encontrada no histórico"})
 		return
 	}
-	path := sessionTelemetryNDJSONPath(id)
-	events, err := loadNDJSONEventLines(path)
+	events, err := dbLoadSessionEvents(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session":     rec,
-			"events":      []json.RawMessage{},
-			"eventCount":  0,
-			"telemetryNote": "ficheiro NDJSON não encontrado ou vazio: " + err.Error(),
+			"session":       rec,
+			"events":        []json.RawMessage{},
+			"eventCount":    0,
+			"telemetryNote": "eventos não encontrados: " + err.Error(),
 		})
 		return
 	}
@@ -274,14 +183,14 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
 	includeEvents := r.URL.Query().Get("includeEvents") == "1" || r.URL.Query().Get("detailed") == "1"
 
-	list, err := loadTestHistory()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
-		return
-	}
+	ctx := r.Context()
 
 	if sessionID != "" {
-		rec := findSessionRecord(list, sessionID)
+		rec, err := dbFindTestHistoryRecord(ctx, sessionID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
 		if rec == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "sessão não encontrada"})
 			return
@@ -289,7 +198,7 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 		if format == "json" {
 			payload := map[string]any{"exportVersion": 2, "session": rec}
 			if includeEvents {
-				events, errEv := loadNDJSONEventLines(sessionTelemetryNDJSONPath(sessionID))
+				events, errEv := dbLoadSessionEvents(ctx, sessionID)
 				if errEv != nil {
 					payload["events"] = []json.RawMessage{}
 					payload["telemetryError"] = errEv.Error()
@@ -304,8 +213,7 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if format == "csv" && includeEvents {
-			path := sessionTelemetryNDJSONPath(sessionID)
-			events, errEv := loadNDJSONEventLines(path)
+			events, errEv := dbLoadSessionEvents(ctx, sessionID)
 			if errEv != nil {
 				writeJSON(w, http.StatusNotFound, map[string]string{"message": errEv.Error()})
 				return
@@ -316,13 +224,7 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 			_ = cw.Write([]string{"index", "event", "elapsedSec", "sessionId", "json"})
 			for i, raw := range events {
 				ev, el, sid, compact := flattenEventCSVFields(raw)
-				_ = cw.Write([]string{
-					strconv.Itoa(i),
-					ev,
-					el,
-					sid,
-					compact,
-				})
+				_ = cw.Write([]string{strconv.Itoa(i), ev, el, sid, compact})
 			}
 			cw.Flush()
 			return
@@ -347,6 +249,12 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	list, err := dbLoadTestHistory(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+
 	switch format {
 	case "json":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -355,11 +263,10 @@ func (s *authServer) handleExportReports(w http.ResponseWriter, r *http.Request)
 			_ = json.NewEncoder(w).Encode(list)
 			return
 		}
-		// Todas as sessões com eventos completos (pode ser pesado).
 		out := make([]map[string]any, 0, len(list))
 		for _, rec := range list {
 			row := map[string]any{"session": rec}
-			events, errEv := loadNDJSONEventLines(sessionTelemetryNDJSONPath(rec.ID))
+			events, errEv := dbLoadSessionEvents(ctx, rec.ID)
 			if errEv != nil {
 				row["events"] = []json.RawMessage{}
 				row["telemetryError"] = errEv.Error()

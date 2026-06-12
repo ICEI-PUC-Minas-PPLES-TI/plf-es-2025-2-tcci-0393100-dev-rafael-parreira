@@ -14,26 +14,26 @@ const FEATURES = [
   {
     icon: "webrtc",
     title: "WebRTC",
-    text: "RTT, jitter, FPS e bitrate agregados por utilizador virtual, alinhados ao que o browser expõe.",
+    text: "RTT, jitter, FPS e bitrate agregados por utilizador virtual, alinhados ao que o browser expõe via getStats().",
     items: ["getStats()", "Por usuário", "Tempo real"]
   },
   {
     icon: "chaos",
     title: "Rede / chaos",
-    text: "3G, latência, offline e perfis intermitentes aplicados via CDP no Chromium do servidor.",
+    text: "3G, latência, offline e perfis intermitentes aplicados via CDP no Chromium — alteráveis durante o teste.",
     items: ["Slow 3G", "Offline", "Latência"]
   },
   {
     icon: "reports",
     title: "Relatórios",
-    text: "NDJSON por teste, resumos agregados e exportação com ou sem eventos detalhados.",
+    text: "NDJSON por teste, resumos agregados e exportação JSON/CSV com ou sem eventos detalhados por sessão.",
     items: ["JSON", "CSV", "Histórico"]
   },
   {
     icon: "load",
     title: "Testes de carga",
-    text: "Execução com múltiplos utilizadores virtuais para acompanhar concorrência, requisições e atividade por segundo.",
-    items: ["Concorrência", "Req/s", "Controle ao vivo"]
+    text: "1 a 50 utilizadores virtuais simultâneos para medir concorrência, requisições e atividade por segundo.",
+    items: ["1–50 VUs", "Req/s", "Controle ao vivo"]
   }
 ];
 
@@ -72,22 +72,50 @@ export default function LandingPage({ onEntrar, onRegisto }) {
 
       <div className="landing-hero" id="top" aria-label="Apresentação">
         <div className="landing-hero-inner">
-          <div className="landing-badge">Observabilidade · WebRTC · Puppeteer</div>
+          <div className="landing-badge">Observabilidade · WebRTC · Puppeteer · Chromium</div>
           <h1 className="landing-title">Teste e audite o seu tráfego em tempo real</h1>
           <p className="landing-lead">
             Telemetria de rede, amostras <code>getStats()</code> ao estilo <em>webrtc-internals</em>, stress com
-            utilizadores virtuais, perfis de chaos e relatórios exportáveis — a partir de uma única consola.
+            até <strong>50 utilizadores virtuais</strong>, perfis de chaos e relatórios exportáveis — a partir de uma única consola.
           </p>
           <ul className="landing-points">
+            <li>1 a 50 utilizadores virtuais simultâneos com Puppeteer + Chromium no servidor</li>
             <li>Dashboard com gráficos e eixo de tempo; passe o rato para ver instantes e valores</li>
             <li>Histórico e exportação JSON/CSV por sessão</li>
             <li>Pausa, retomada e ajuste de concorrência durante o teste</li>
+            <li>Simulação de falhas de rede: 3G lenta, alta latência, offline e modo instável (chaos)</li>
           </ul>
+
+          <div className="landing-platforms" aria-label="Plataformas suportadas">
+            <span>Jitsi Meet</span>
+            <span>Whereby</span>
+            <span>Zoom</span>
+            <span>WebRTC genérico</span>
+          </div>
+
           <div className="landing-capabilities" aria-label="Indicadores principais">
+            <span>1–50 VUs</span>
             <span>Auditoria ao vivo</span>
             <span>Controle de concorrência</span>
             <span>Exportação detalhada</span>
           </div>
+        </div>
+      </div>
+
+      <div className="landing-stats" aria-label="Capacidades da plataforma">
+        <div className="landing-stat">
+          <span className="landing-stat-value">50</span>
+          <span className="landing-stat-label">Usuários virtuais simultâneos</span>
+        </div>
+        <div className="landing-stat-divider" aria-hidden="true" />
+        <div className="landing-stat">
+          <span className="landing-stat-value">3</span>
+          <span className="landing-stat-label">Plataformas WebRTC suportadas</span>
+        </div>
+        <div className="landing-stat-divider" aria-hidden="true" />
+        <div className="landing-stat">
+          <span className="landing-stat-value">∞</span>
+          <span className="landing-stat-label">Sessões históricas armazenadas</span>
         </div>
       </div>
 
@@ -105,6 +133,15 @@ export default function LandingPage({ onEntrar, onRegisto }) {
           </div>
         ))}
       </section>
+
+
+<footer className="landing-footer">
+        <span>Stream Sentry</span>
+        <span className="landing-footer-sep" aria-hidden="true">·</span>
+        <span>Ferramenta de auditoria e stress WebRTC</span>
+        <span className="landing-footer-sep" aria-hidden="true">·</span>
+        <span>1–50 utilizadores virtuais · Jitsi · Whereby · Zoom</span>
+      </footer>
     </div>
   );
 }

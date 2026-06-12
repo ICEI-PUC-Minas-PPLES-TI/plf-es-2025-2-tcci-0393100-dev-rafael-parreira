@@ -12,13 +12,24 @@ const sampleConfig = {
   virtualUsers: 12
 };
 
-const Logo = () => (
+const Logo = ({ onClick }) => (
   <div
     className="logo-container"
     style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: "20px" }}
   >
-    <img src={logo} alt="Stream Sentry Logo" style={{ width: "80px", height: "auto", marginBottom: "10px" }} />
-    <h1 style={{ margin: 0 }}>Stream Sentry</h1>
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
+        background: "none", border: "none", color: "inherit",
+        cursor: onClick ? "pointer" : "default", padding: 0
+      }}
+      aria-label="Voltar ao início"
+    >
+      <img src={logo} alt="Stream Sentry Logo" style={{ width: "80px", height: "auto", marginBottom: "10px", borderRadius: "1.25rem" }} />
+      <h1 style={{ margin: 0 }}>Stream Sentry</h1>
+    </button>
   </div>
 );
 
@@ -104,10 +115,30 @@ function isWherebyUrl(url) {
   }
 }
 
+function isJitsiUrl(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "meet.jit.si" || h.endsWith(".jit.si") || h.includes("8x8.vc") || h.includes("jitsi");
+  } catch {
+    return false;
+  }
+}
+
+function isTokenOptional(url) {
+  return isWherebyUrl(url) || isJitsiUrl(url);
+}
+
 function validateConfig(config) {
   const users = Number(config.virtualUsers);
   if (!Number.isInteger(users) || users < 1 || users > 50) {
     throw new Error("O número de usuários deve estar entre 1 e 50.");
+  }
+  if (isWherebyUrl(config.apiUrl) && users > 4) {
+    throw new Error("O Whereby no plano gratuito permite no máximo 4 usuários simultâneos.");
+  }
+  const callDurationSec = Number(config.callDurationSec);
+  if (!Number.isInteger(callDurationSec) || callDurationSec < 90 || callDurationSec > 1800) {
+    throw new Error("A duração da chamada deve estar entre 90 segundos (1min30s) e 1800 segundos.");
   }
   try {
     const parsedUrl = new URL(config.apiUrl);
@@ -117,13 +148,14 @@ function validateConfig(config) {
   } catch {
     throw new Error("Informe uma URL de API válida.");
   }
-  if (!isWherebyUrl(config.apiUrl) && !config.accessToken.trim()) {
+  if (!isTokenOptional(config.apiUrl) && !config.accessToken.trim()) {
     throw new Error("Informe o token de acesso.");
   }
   return {
     apiUrl: config.apiUrl.trim(),
     accessToken: config.accessToken.trim(),
-    virtualUsers: users
+    virtualUsers: users,
+    callDurationSec
   };
 }
 
@@ -135,17 +167,20 @@ export default function App() {
   const [mainView, setMainView] = useState("start");
   const [feedback, setFeedback] = useState("");
   const [feedbackType, setFeedbackType] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("");
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [registerForm, setRegisterForm] = useState({ name: "", email: "", password: "" });
   const [puppeteerLoading, setPuppeteerLoading] = useState(false);
   const [puppeteerResult, setPuppeteerResult] = useState(null);
   const [wherebyCreating, setWherebyCreating] = useState(false);
+  const [jitsiCreating, setJitsiCreating] = useState(false);
   const [testStarting, setTestStarting] = useState(false);
   const [testStopping, setTestStopping] = useState(false);
   const [liveTestRunning, setLiveTestRunning] = useState(false);
   const [activeTestSessionId, setActiveTestSessionId] = useState("");
   const [activeTestElapsedSec, setActiveTestElapsedSec] = useState(null);
   const [chaosProfile, setChaosProfile] = useState("off");
+  const [headfulMode, setHeadfulMode] = useState(() => localStorage.getItem("streamSentryHeadful") === "1");
   const [auditTargetUsers, setAuditTargetUsers] = useState(1);
   const [auditChaos, setAuditChaos] = useState("off");
   const [controlBusy, setControlBusy] = useState(false);
@@ -158,17 +193,18 @@ export default function App() {
   const [configForm, setConfigForm] = useState(() => {
     const savedConfig = localStorage.getItem("streamSentryTechConfig");
     if (!savedConfig) {
-      return { apiUrl: apiBaseUrl, accessToken: "", virtualUsers: 10 };
+      return { apiUrl: apiBaseUrl, accessToken: "", virtualUsers: 10, callDurationSec: 90 };
     }
     try {
       const parsed = JSON.parse(savedConfig);
       return {
         apiUrl: parsed.apiUrl || apiBaseUrl,
         accessToken: parsed.accessToken || "",
-        virtualUsers: Number(parsed.virtualUsers) || 10
+        virtualUsers: Number(parsed.virtualUsers) || 10,
+        callDurationSec: Math.max(90, Number(parsed.callDurationSec) || 90)
       };
     } catch {
-      return { apiUrl: apiBaseUrl, accessToken: "", virtualUsers: 10 };
+      return { apiUrl: apiBaseUrl, accessToken: "", virtualUsers: 10, callDurationSec: 90 };
     }
   });
 
@@ -180,6 +216,7 @@ export default function App() {
   function handleSessionInvalid() {
     localStorage.removeItem("streamSentryToken");
     setAuthToken("");
+    setCurrentUserName("");
     setScreen("auth");
     setTab("login");
     setMainView("start");
@@ -232,6 +269,22 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!authToken || currentUserName) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await getWithAuth("/auth/me", authToken);
+        if (!cancelled) setCurrentUserName(result.user.name);
+      } catch {
+        // ignora — o feedback de sessão inválida é tratado pelos outros efeitos
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, currentUserName]);
+
+  useEffect(() => {
     if (screen !== "app" || !authToken) return undefined;
     let cancelled = false;
     (async () => {
@@ -276,12 +329,19 @@ export default function App() {
     };
   }, [screen, authToken, mainView]);
 
+  useEffect(() => {
+    if (isWherebyUrl(configForm.apiUrl) && configForm.virtualUsers !== 1) {
+      setConfigForm((prev) => ({ ...prev, virtualUsers: 1 }));
+    }
+  }, [configForm.apiUrl]);
+
   async function handleRegister(event) {
     event.preventDefault();
     try {
       const result = await post("/auth/register", registerForm);
       localStorage.setItem("streamSentryToken", result.token);
       setAuthToken(result.token);
+      setCurrentUserName(result.user.name);
       setMessage("Cadastro realizado com sucesso.", "success");
       setRegisterForm({ name: "", email: "", password: "" });
       setScreen("app");
@@ -297,7 +357,7 @@ export default function App() {
       const result = await post("/auth/login", loginForm);
       localStorage.setItem("streamSentryToken", result.token);
       setAuthToken(result.token);
-      setMessage(`Bem-vindo, ${result.user.name}.`, "success");
+      setCurrentUserName(result.user.name);
       setLoginForm({ email: "", password: "" });
       setScreen("app");
       setMainView("start");
@@ -333,6 +393,21 @@ export default function App() {
     }
   }
 
+  async function handleCreateJitsiRoom() {
+    try {
+      setJitsiCreating(true);
+      setMessage("Gerando sala Jitsi…", "");
+      const result = await postWithAuth("/platform/jitsi/room-url", {}, authToken);
+      setConfigForm((prev) => ({ ...prev, apiUrl: result.roomUrl, accessToken: "" }));
+      setMessage(`Sala Jitsi gerada: ${result.roomUrl}`, "success");
+    } catch (error) {
+      if (error.unauthorized) { handleSessionInvalid(); return; }
+      setMessage(error.message, "error");
+    } finally {
+      setJitsiCreating(false);
+    }
+  }
+
   async function handlePuppeteerSmoke() {
     try {
       const validatedConfig = validateConfig(configForm);
@@ -357,7 +432,7 @@ export default function App() {
       setMessage("Iniciando teste com Puppeteer…", "");
       const result = await postWithAuth(
         "/test/start",
-        { ...validated, chaos: { profile: chaosProfile } },
+        { ...validated, chaos: { profile: chaosProfile }, headful: headfulMode },
         authToken
       );
       setAuditTargetUsers(validated.virtualUsers);
@@ -538,6 +613,7 @@ export default function App() {
   function handleLogout() {
     localStorage.removeItem("streamSentryToken");
     setAuthToken("");
+    setCurrentUserName("");
     setLiveTestRunning(false);
     setScreen("landing");
     setTab("login");
@@ -569,10 +645,7 @@ export default function App() {
       ) : null}
       {screen === "auth" ? (
         <section className="card card-auth">
-          <button type="button" className="link-back" onClick={() => setScreen("landing")}>
-            ← Voltar ao início
-          </button>
-          <Logo />
+          <Logo onClick={() => setScreen("landing")} />
           <p className="subtitle">Autenticação</p>
 
           <div className="tabs">
@@ -691,6 +764,9 @@ export default function App() {
                 </button>
               </nav>
               <div className="site-header-actions">
+                {mainView === "start" && currentUserName && (
+                  <span className="welcome-badge">Bem-vindo, {currentUserName}!</span>
+                )}
                 {liveTestRunning && (
                   <button
                     type="button"
@@ -717,10 +793,6 @@ export default function App() {
                 Defina a URL alvo, o token Bearer enviado nas requisições e quantos usuários virtuais o Puppeteer irá
                 simular em lotes. Também pode usar salas WebRTC como Jitsi ou Whereby; nesses domínios o token é opcional.
               </p>
-              <p className="muted-small">
-                Zoom: prefira uma página sua com Zoom Meeting SDK. Links públicos <code>zoom.us/j/...</code> são tentados via
-                web client, mas podem pedir login, CAPTCHA ou confirmação manual.
-              </p>
               <div className="example-box">
                 <p>Exemplo rápido para testar:</p>
                 <code>URL: {sampleConfig.apiUrl}</code>
@@ -739,38 +811,76 @@ export default function App() {
                     onChange={(e) => setConfigForm({ ...configForm, apiUrl: e.target.value })}
                     required
                   />
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={handleCreateWherebyRoom}
-                    disabled={wherebyCreating}
-                    style={{ marginTop: "8px" }}
-                  >
-                    {wherebyCreating ? "Criando sala…" : "Criar sala Whereby"}
-                  </button>
+                  <div className="platform-buttons" style={{ marginTop: "8px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <button
+                      className="ghost"
+                      type="button"
+                      onClick={handleCreateWherebyRoom}
+                      disabled={wherebyCreating}
+                    >
+                      {wherebyCreating ? "Criando sala…" : "Criar sala Whereby"}
+                    </button>
+                    <button
+                      className="ghost"
+                      type="button"
+                      onClick={handleCreateJitsiRoom}
+                      disabled={jitsiCreating}
+                    >
+                      {jitsiCreating ? "Gerando sala…" : "Gerar sala Jitsi"}
+                    </button>
+                  </div>
+                  {isJitsiUrl(configForm.apiUrl) && (
+                    <div className="jitsi-notice">
+                      <strong className="jitsi-notice-title">Login manual necessário — Jitsi com autenticação Google</strong>
+                      <p>
+                        Ao iniciar o teste, o navegador do <strong>VU 1 (anfitrião)</strong> abrirá visivelmente. Faça login com o Google nessa janela para provar autenticidade e tornar-se moderador da sala — o Google bloqueia logins automatizados por bots. Os demais VUs entram como <strong>convidados automaticamente</strong> assim que o anfitrião abrir a sala.
+                      </p>
+                      <p className="jitsi-notice-sub">
+                        Os dados WebRTC do anfitrião (VU 1) também são capturados e aparecem nos gráficos normalmente.
+                      </p>
+                    </div>
+                  )}
+                  {isWherebyUrl(configForm.apiUrl) && (
+                    <div className="whereby-notice">
+                      <strong className="whereby-notice-title">Limite de 4 usuários — restrição do plano gratuito do Whereby</strong>
+                      <p>
+                        O Whereby restringe salas do plano gratuito a no máximo <strong>4 usuários simultâneos</strong>. Mesmo que o campo abaixo seja definido com um valor maior, apenas os 4 primeiros usuários virtuais conseguirão ingressar na chamada.
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="config-block">
                   <h2>Autenticação</h2>
                   <label htmlFor="start-token">
-                    Token de acesso{isWherebyUrl(configForm.apiUrl) ? " (não necessário para Whereby)" : ""}
+                    Token de acesso
+                    {isWherebyUrl(configForm.apiUrl) ? " (não necessário para Whereby)" : ""}
+                    {isJitsiUrl(configForm.apiUrl) ? " (não necessário para Jitsi)" : ""}
                   </label>
                   <input
                     id="start-token"
                     type="text"
                     value={configForm.accessToken}
                     onChange={(e) => setConfigForm({ ...configForm, accessToken: e.target.value })}
-                    required={!isWherebyUrl(configForm.apiUrl)}
-                    placeholder={isWherebyUrl(configForm.apiUrl) ? "Opcional para Whereby" : ""}
+                    required={!isTokenOptional(configForm.apiUrl)}
+                    placeholder={
+                      isWherebyUrl(configForm.apiUrl)
+                        ? "Opcional para Whereby"
+                        : isJitsiUrl(configForm.apiUrl)
+                          ? "Opcional para Jitsi"
+                          : ""
+                    }
                   />
                 </div>
                 <div className="config-block">
                   <h2>Usuários virtuais (Puppeteer)</h2>
-                  <label htmlFor="start-users">Quantidade inicial (1 a 50)</label>
+                  <label htmlFor="start-users">
+                    Quantidade inicial ({isWherebyUrl(configForm.apiUrl) ? "1 a 4 — limite do Whereby" : "1 a 50"})
+                  </label>
                   <input
                     id="start-users"
                     type="number"
                     min={1}
-                    max={50}
+                    max={isWherebyUrl(configForm.apiUrl) ? 4 : 50}
                     value={configForm.virtualUsers}
                     onChange={(e) => setConfigForm({ ...configForm, virtualUsers: Number(e.target.value) })}
                     required
@@ -779,6 +889,57 @@ export default function App() {
                     Com o servidor em modo pool, este valor define a concorrência inicial; pode ajustar durante o teste na
                     Auditoria.
                   </p>
+                  <label htmlFor="start-call-duration">Duração da chamada (segundos)</label>
+                  <input
+                    id="start-call-duration"
+                    type="number"
+                    min={90}
+                    max={1800}
+                    value={configForm.callDurationSec}
+                    onChange={(e) => setConfigForm({ ...configForm, callDurationSec: Number(e.target.value) })}
+                    required
+                  />
+                  <p className="muted-small">
+                    Tempo que cada usuário virtual permanece na chamada coletando métricas, de 90 segundos
+                    (1min30s) a 1800 segundos (30 minutos).
+                  </p>
+                  <p className="muted-small">
+                    Com muitos usuários virtuais, a entrada na chamada pode demorar mais. Por isso, a contagem
+                    dessa duração só começa depois que <strong>todos os usuários virtuais entrarem na chamada</strong> —
+                    o tempo total do teste pode, então, ser maior que este valor. Acompanhe o progresso na tela de
+                    Auditoria.
+                  </p>
+                </div>
+                <div className="config-block">
+                  <h2>Modo do navegador (Puppeteer)</h2>
+                  <label className="checkbox-inline" htmlFor="headful-mode">
+                    <input
+                      id="headful-mode"
+                      type="checkbox"
+                      checked={headfulMode}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setHeadfulMode(checked);
+                        localStorage.setItem("streamSentryHeadful", checked ? "1" : "0");
+                      }}
+                    />
+                    Mostrar a janela do navegador (modo não-headless)
+                  </label>
+                  <p className="muted-small">
+                    Por padrão o Puppeteer roda em segundo plano (headless). Ative para abrir a janela do navegador
+                    do usuário virtual 1 — útil para depuração. Para salas Jitsi, a aba do usuário virtual 1 sempre
+                    aparece, independentemente desta opção, pois é necessário fazer login manualmente.
+                  </p>
+                  {headfulMode && Number(configForm.virtualUsers) >= 10 && (
+                    <div className="whereby-notice">
+                      <strong className="whereby-notice-title">Cuidado com o modo não-headless em testes grandes</strong>
+                      <p>
+                        Com {configForm.virtualUsers} usuários virtuais, manter o navegador visível pode consumir muita
+                        memória/CPU e deixar o teste lento ou instável. Recomendado apenas para depuração com poucos
+                        usuários — para 10 ou mais, prefira deixar esta opção desmarcada (modo headless).
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="config-block">
                   <h2>Chaos (rede)</h2>
@@ -970,6 +1131,11 @@ export default function App() {
               webrtcLastByUser={telemetry.webrtcLastByUser}
               liveTestRunning={liveTestRunning}
               testElapsedSec={telemetry.testElapsedSec ?? activeTestElapsedSec}
+              callDurationSec={configForm.callDurationSec}
+              joinedUserCount={telemetry.joinedUserCount}
+              activeStatsUserCount={telemetry.activeStatsUserCount}
+              targetVirtualUsers={telemetry.targetVirtualUsers}
+              callStartedAtMs={telemetry.callStartedAtMs}
               activeSessionId={telemetry.activeSessionId || activeTestSessionId}
               auditTargetUsers={auditTargetUsers}
               auditChaos={auditChaos}

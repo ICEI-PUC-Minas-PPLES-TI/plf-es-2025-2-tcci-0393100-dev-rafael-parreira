@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { summaryHasWebrtcActivity } from "./useTelemetryWS.js";
 import TimeSeriesLineChart from "./TimeSeriesLineChart.jsx";
 
@@ -48,6 +48,22 @@ function shortClock(iso) {
   }
 }
 
+function statusColorClass(status) {
+  const code = Number(status);
+  if (code >= 500) return "status-bar-fill--5xx";
+  if (code >= 400) return "status-bar-fill--4xx";
+  if (code >= 300) return "status-bar-fill--3xx";
+  return "status-bar-fill--2xx";
+}
+
+function statusCodeClass(status) {
+  const code = Number(status);
+  if (code >= 500) return "status-code--5xx";
+  if (code >= 400) return "status-code--4xx";
+  if (code >= 300) return "status-code--3xx";
+  return "status-code--2xx";
+}
+
 function StatusBars({ counts }) {
   const entries = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
   if (!entries.length) {
@@ -58,9 +74,9 @@ function StatusBars({ counts }) {
     <div className="status-bars">
       {entries.map(([status, n]) => (
         <div key={status} className="status-bar-row">
-          <span className="status-code">{status}</span>
+          <span className={`status-code ${statusCodeClass(status)}`}>{status}</span>
           <div className="status-bar-track">
-            <div className="status-bar-fill" style={{ width: `${(n / max) * 100}%` }} />
+            <div className={`status-bar-fill ${statusColorClass(status)}`} style={{ width: `${(n / max) * 100}%` }} />
           </div>
           <span className="status-count">{n}</span>
         </div>
@@ -251,8 +267,12 @@ const CHAOS_QUICK = [
 
 function getAuditStatus({ connected, liveTestRunning, lastEvent, historical }) {
   if (historical) return { label: "Concluído", tone: "done" };
-  if (lastEvent === "test_stopped") return { label: "Finalizando", tone: "stopping" };
-  if (lastEvent === "test_complete" || lastEvent === "server_audit_summary") return { label: "Concluído", tone: "done" };
+  if (lastEvent === "test_complete" || lastEvent === "server_audit_summary") return { label: "Finalizado", tone: "done" };
+  if (lastEvent === "test_stopped") {
+    return liveTestRunning
+      ? { label: "Finalizando", tone: "stopping" }
+      : { label: "Finalizado", tone: "done" };
+  }
   if (!liveTestRunning) return { label: "Aguardando", tone: "idle" };
   if (!connected) return { label: "Aguardando conexão", tone: "waiting" };
   if (!lastEvent) return { label: "Aguardando eventos", tone: "waiting" };
@@ -285,6 +305,17 @@ const CHART_PALETTES = {
   fpsIn:        makeFamilyPalette(340),  // Rosa / Pink
 };
 
+// Com até 7 usuários, cada um recebe uma cor do arco-íris (mais fácil de distinguir entre os gráficos).
+const RAINBOW_PALETTE = [
+  "hsl(0, 82%, 55%)",   // Vermelho
+  "hsl(30, 82%, 55%)",  // Laranja
+  "hsl(55, 82%, 55%)",  // Amarelo
+  "hsl(130, 82%, 40%)", // Verde
+  "hsl(210, 82%, 55%)", // Azul
+  "hsl(265, 82%, 60%)", // Anil/Índigo
+  "hsl(290, 82%, 60%)"  // Violeta
+];
+
 export default function AuditDashboard({
   connected,
   lastEvent,
@@ -301,6 +332,11 @@ export default function AuditDashboard({
   webrtcLastByUser,
   liveTestRunning,
   testElapsedSec,
+  callDurationSec = null,
+  joinedUserCount = 0,
+  activeStatsUserCount = 0,
+  targetVirtualUsers = null,
+  callStartedAtMs = null,
   activeSessionId,
   auditTargetUsers,
   auditChaos,
@@ -317,9 +353,17 @@ export default function AuditDashboard({
 }) {
   const auditStatus = getAuditStatus({ connected, liveTestRunning, lastEvent, historical });
 
+  const [callNowMs, setCallNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!liveTestRunning || callStartedAtMs == null) return undefined;
+    const iv = setInterval(() => setCallNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [liveTestRunning, callStartedAtMs]);
+  const callElapsedSec = callStartedAtMs != null ? (callNowMs - callStartedAtMs) / 1000 : null;
+
   const userIds = Object.keys(webrtcPerUserSeries || {}).sort((a, b) => Number(a) - Number(b));
   const buildMultiSeries = (key) => {
-    const palette = CHART_PALETTES[key] || makeFamilyPalette(200);
+    const palette = userIds.length <= 7 ? RAINBOW_PALETTE : (CHART_PALETTES[key] || makeFamilyPalette(200));
     return userIds
       .map((uid, i) => ({
         values: webrtcPerUserSeries[uid]?.[key] || [],
@@ -397,6 +441,26 @@ export default function AuditDashboard({
                 </code>
               ) : null}
             </div>
+            {callDurationSec != null && (
+              <div className="duration-pill">
+                {callStartedAtMs == null ? (
+                  <>
+                    <span className="muted-small">Duração da chamada</span>
+                    <strong className="duration-value">
+                      Aguardando dados de todos os usuários
+                      {targetVirtualUsers ? ` (${activeStatsUserCount}/${targetVirtualUsers})` : ""}…
+                    </strong>
+                  </>
+                ) : (
+                  <>
+                    <span className="muted-small">Duração da chamada (em andamento / configurada)</span>
+                    <strong className="duration-value">
+                      {fmtDurationSec(callElapsedSec)} / {fmtDurationSec(callDurationSec)}
+                    </strong>
+                  </>
+                )}
+              </div>
+            )}
             <div className="audit-pause-row">
               <button type="button" className="ghost btn-compact" onClick={onPause} disabled={controlBusy}>
                 Pausar
@@ -554,18 +618,13 @@ export default function AuditDashboard({
       </div>
 
       <div className="audit-block">
-        <h3>Distribuição de status HTTP</h3>
-        <StatusBars counts={statusCounts} />
-      </div>
-
-      <div className="audit-block">
         <h3>Feed ao vivo</h3>
         <ul className="feed-list">
           {feed.length === 0 ? (
             <li className="muted-small">Inicie um teste na aba &quot;Iniciar teste&quot; para ver o tráfego aqui.</li>
           ) : (
             feed.map((item, i) => (
-              <li key={`${item.ts}-${i}`} className={item.kind === "fail" ? "feed-fail" : ""}>
+              <li key={`${item.ts}-${i}`}>
                 <code>
                   {item.ts ? <span className="feed-time">{shortClock(item.ts)} · </span> : null}
                   {item.text}

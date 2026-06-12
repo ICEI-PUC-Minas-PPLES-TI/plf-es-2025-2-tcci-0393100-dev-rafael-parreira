@@ -359,6 +359,10 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
     webrtc: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] }
   });
   const [testWallStartMs, setTestWallStartMs] = useState(null);
+  const [joinedUserCount, setJoinedUserCount] = useState(0);
+  const [activeStatsUserCount, setActiveStatsUserCount] = useState(0);
+  const [targetVirtualUsers, setTargetVirtualUsers] = useState(null);
+  const [callStartedAtMs, setCallStartedAtMs] = useState(null);
 
   const totalsRef = useRef({ req: 0, res: 0, fail: 0 });
   const cumulativeListRef = useRef([]);
@@ -373,6 +377,13 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
   const lastElapsedUiAtRef = useRef(0);
   const webrtcSeriesRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
   const webrtcTimeMsRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
+  /** Usuários que já entraram na chamada (evento user_joined) — usado para só iniciar a
+   *  contagem da "duração da chamada" quando todos os VUs tiverem entrado. */
+  const joinedUserIdsRef = useRef(new Set());
+  /** Usuários cujas métricas WebRTC já estão ativas (alimentando os gráficos). */
+  const activeStatsUserIdsRef = useRef(new Set());
+  const targetVirtualUsersRef = useRef(null);
+  const callStartedAtRef = useRef(null);
 
   useEffect(() => {
     if (!enabled || !token) {
@@ -420,6 +431,14 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       webrtcPerUserSeriesRef.current = {};
       prevBytesPerUserRef.current = {};
       cumulativeTimeMsRef.current = [];
+      joinedUserIdsRef.current = new Set();
+      activeStatsUserIdsRef.current = new Set();
+      targetVirtualUsersRef.current = null;
+      callStartedAtRef.current = null;
+      setJoinedUserCount(0);
+      setActiveStatsUserCount(0);
+      setTargetVirtualUsers(null);
+      setCallStartedAtMs(null);
       setRequestTotal(0);
       setResponseTotal(0);
       setFailTotal(0);
@@ -610,6 +629,28 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       feedListRef.current = [item, ...feedListRef.current].slice(0, 40);
     };
 
+    /** Um usuário só conta como "pronto" quando JÁ ENTROU na chamada (user_joined)
+     *  E suas métricas WebRTC estão ativas nos gráficos — a pré-sala também cria
+     *  RTCPeerConnections, então atividade sozinha não significa que entrou. */
+    const maybeStartCallTimer = (tsIso) => {
+      if (callStartedAtRef.current != null) return;
+      let ready = 0;
+      for (const id of activeStatsUserIdsRef.current) {
+        if (joinedUserIdsRef.current.has(id)) ready += 1;
+      }
+      setActiveStatsUserCount(ready);
+      const target = targetVirtualUsersRef.current;
+      if (target != null && ready >= target) {
+        callStartedAtRef.current = Date.now();
+        setCallStartedAtMs(callStartedAtRef.current);
+        prependFeed({
+          kind: "info",
+          text: `Todos os ${target} usuários entraram e os dados começaram a atualizar nos gráficos — iniciando a contagem da duração da chamada.`,
+          ts: tsIso
+        });
+      }
+    };
+
     function wireWebSocket(socket) {
       socket.onopen = () => {
         setConnected(true);
@@ -643,6 +684,11 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
           const wall = Number.isNaN(startedAtMs) ? Date.now() : startedAtMs;
           setTestWallStartMs(wall);
           if (data.sessionId) sessionIdRef.current = String(data.sessionId);
+          const target = Number(data.targetVirtualUsers ?? data.virtualUsers);
+          if (Number.isFinite(target) && target >= 1) {
+            targetVirtualUsersRef.current = target;
+            setTargetVirtualUsers(target);
+          }
           if (data.elapsedSec != null && Number.isFinite(Number(data.elapsedSec))) {
             const es = Number(data.elapsedSec);
             elapsedValueRef.current = es;
@@ -740,6 +786,10 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
             text: `Chaos de rede: perfil «${data.profile}» (aplicado nos Chromium)`,
             ts: data.ts
           });
+        }
+
+        if (data.event === "pool_draining" && data.message) {
+          prependFeed({ kind: "info", text: String(data.message), ts: data.ts });
         }
 
         if (data.event === "jitsi_debug_hint" && data.message) {
@@ -901,6 +951,12 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
          * mostrar os valores finais; o mapa é limpo pelo resetMetrics() no início do próximo teste.
          * NÃO apagar aqui: zeraria os KPIs imediatamente após o teste terminar.
          */
+        if (data.event === "user_joined" && data.userId != null) {
+          joinedUserIdsRef.current.add(String(data.userId));
+          setJoinedUserCount(joinedUserIdsRef.current.size);
+          maybeStartCallTimer(data.ts);
+        }
+
         if ((data.event === 'user_done' || data.event === 'user_error') && data.userId != null) {
           // Marcar como concluído sem apagar — os valores finais ficam visíveis no dashboard
           const uid = String(data.userId);
@@ -988,6 +1044,14 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
           lastByUserRef.current[uid] = pickWebrtcSummaryForDisplay(prevU, data.summary);
           appendWebrtcSeriesSample(sampleMs);
           webrtcDirtyRef.current = true;
+          // Inicia a contagem da "duração da chamada" apenas quando TODOS os VUs já
+          // entraram na chamada E estão com métricas WebRTC ativas nos gráficos.
+          if (callStartedAtRef.current == null) {
+            if (summaryHasWebrtcActivity(data.summary) && !activeStatsUserIdsRef.current.has(uid)) {
+              activeStatsUserIdsRef.current.add(uid);
+            }
+            maybeStartCallTimer(data.ts);
+          }
         }
       };
     }
@@ -1050,6 +1114,10 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
     elapsedSeries,
     activeSessionId,
     seriesTimeMs,
-    testWallStartMs
+    testWallStartMs,
+    joinedUserCount,
+    activeStatsUserCount,
+    targetVirtualUsers,
+    callStartedAtMs
   };
 }
