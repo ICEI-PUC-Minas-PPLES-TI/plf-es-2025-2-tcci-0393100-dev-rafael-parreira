@@ -3,12 +3,12 @@ import logo from "../Logo.svg";
 import AuditDashboard from "./AuditDashboard";
 import LandingPage from "./LandingPage";
 import { buildTelemetrySnapshotFromEvents, useTelemetryWS } from "./useTelemetryWS";
+import { isWherebyUrl, isJitsiUrl, isTokenOptional, validateConfig } from "./validation";
 import type {
   ApiError,
   ConfigForm,
   HistoricalAudit,
-  TestHistoryRecord,
-  ValidatedConfig
+  TestHistoryRecord
 } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -113,59 +113,6 @@ const CHAOS_START_OPTIONS = [
   { value: "flaky", label: "Intermitente (chaos)" },
   { value: "dns_failure", label: "Falha DNS (simulada)" }
 ];
-
-function isWherebyUrl(url) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h === "whereby.com" || h.endsWith(".whereby.com");
-  } catch {
-    return false;
-  }
-}
-
-function isJitsiUrl(url) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h === "meet.jit.si" || h.endsWith(".jit.si") || h.includes("8x8.vc") || h.includes("jitsi");
-  } catch {
-    return false;
-  }
-}
-
-function isTokenOptional(url) {
-  return isWherebyUrl(url) || isJitsiUrl(url);
-}
-
-function validateConfig(config: ConfigForm): ValidatedConfig {
-  const users = Number(config.virtualUsers);
-  if (!Number.isInteger(users) || users < 1 || users > 50) {
-    throw new Error("O número de usuários deve estar entre 1 e 50.");
-  }
-  if (isWherebyUrl(config.apiUrl) && users > 4) {
-    throw new Error("O Whereby no plano gratuito permite no máximo 4 usuários simultâneos.");
-  }
-  const callDurationSec = Number(config.callDurationSec);
-  if (!Number.isInteger(callDurationSec) || callDurationSec < 90 || callDurationSec > 1800) {
-    throw new Error("A duração da chamada deve estar entre 90 segundos (1min30s) e 1800 segundos.");
-  }
-  try {
-    const parsedUrl = new URL(config.apiUrl);
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      throw new Error("A URL da API deve usar HTTP ou HTTPS.");
-    }
-  } catch {
-    throw new Error("Informe uma URL de API válida.");
-  }
-  if (!isTokenOptional(config.apiUrl) && !config.accessToken.trim()) {
-    throw new Error("Informe o token de acesso.");
-  }
-  return {
-    apiUrl: config.apiUrl.trim(),
-    accessToken: config.accessToken.trim(),
-    virtualUsers: users,
-    callDurationSec
-  };
-}
 
 export default function App() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem("streamSentryToken") || "");
