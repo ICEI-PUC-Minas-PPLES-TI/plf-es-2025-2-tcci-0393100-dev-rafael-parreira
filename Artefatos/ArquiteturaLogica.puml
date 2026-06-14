@@ -1,76 +1,56 @@
 @startuml
 skinparam componentStyle rectangle
-skinparam linetype ortho
+skinparam shadowing false
 skinparam rankdir TB
-skinparam nodesep 20
-skinparam ranksep 30
+skinparam nodesep 35
+skinparam ranksep 60
 
-title Stream Sentry - Arquitetura Lógica (Formato Retrato A4)
+title Stream Sentry - Arquitetura Lógica
 
 package "1. Interface Web (React)" #F9F9F9 {
   component "Views: Landing, Autenticação,\nIniciar Teste, Auditoria, Histórico" as UI
 }
 
 package "2. Servidor Core (Go)" #E8F4FC {
-  component "API REST (auth, testes, relatórios)" as REST
-  component "Hub WebSocket (telemetria)" as WSHub
+  component "API REST\n(auth, testes, relatórios)" as REST
+  component "Hub WebSocket\n(telemetria)" as WSHub
   component "Orquestrador de Teste" as Orchestrator
   component "Motor de Relatórios" as Reports
-
-  ' Força os componentes do Go a ficarem um embaixo do outro
-  REST -[hidden]down-> WSHub
-  WSHub -[hidden]down-> Orchestrator
-  Orchestrator -[hidden]down-> Reports
 }
 
 package "3. Persistência (MongoDB)" #F5F5E8 {
   component "users / test_history" as UserHist
-  component "telemetry_events (NDJSON)" as TelFiles
-
-  UserHist -[hidden]down-> TelFiles
+  component "telemetry_events" as TelFiles
 }
 
 package "4. Runner de Teste (Node.js)" #F0F0F0 {
   component "run-audit.mjs (pool)" as Script
-  component "Workers (Chromium / Worker Threads)" as Workers
-
-  Script -[hidden]down-> Workers
+  component "Workers\n(Chromium / Worker Threads)" as Workers
 }
 
 package "5. Sistemas Externos" #FFFFFF {
   component "Salas de Videoconferência\n(Jitsi, Whereby, Zoom)" as External
 }
 
-' ==========================================
-' ESTRUTURA VERTICAL INVISÍVEL
-' ==========================================
-' Estas linhas forçam os pacotes a se empilharem perfeitamente
-UI -[hidden]down-> REST
-Reports -[hidden]down-> UserHist
-TelFiles -[hidden]down-> Script
-Workers -[hidden]down-> External
+' ── Fluxos (rótulos curtos para evitar sobreposição) ──
+UI --> REST : HTTP/JSON
+UI <--> WSHub : WebSocket
 
-' ==========================================
-' FLUXOS DE COMUNICAÇÃO REAIS
-' ==========================================
-UI --> REST : HTTP JSON (Config)
-UI <--> WSHub : WebSocket Live
+REST --> Orchestrator : /test/start
+REST --> Reports : export
+REST ..> UserHist : auth
 
-REST --> Orchestrator : Comandos (/test/start)
-REST --> Reports : Exportações (CSV/JSON)
-REST ..> UserHist : Lê/Grava Auth
+Orchestrator --> WSHub : broadcast
+Orchestrator --> Script : spawn
+Orchestrator ..> TelFiles : persiste
+Orchestrator ..> UserHist : histórico
 
-Orchestrator --> WSHub : Broadcast JSON
-Orchestrator --> Script : Spawn Processo Node
-Orchestrator ..> TelFiles : Persiste eventos
-Orchestrator ..> UserHist : Agrega Fim de Teste
+Reports ..> TelFiles : lê
+Reports ..> UserHist : lê
 
-Reports ..> TelFiles : Lê eventos
-Reports ..> UserHist : Lê Histórico
+Script ..> Orchestrator : stdout
+Script --> Workers : browsers
 
-Script ..> Orchestrator : Stdout (Telemetria)
-Script --> Workers : Lança Browsers
-
-Workers <--> External : Tráfego WebRTC / getStats()
+Workers <--> External : WebRTC / getStats()
 
 @enduml

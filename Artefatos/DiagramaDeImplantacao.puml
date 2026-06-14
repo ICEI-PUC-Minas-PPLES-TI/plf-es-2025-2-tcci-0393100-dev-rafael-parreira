@@ -1,28 +1,39 @@
 @startuml
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam ranksep 55
+skinparam nodesep 40
 
-node "Servidor Frontend\n(Vercel / Netlify)" as Frontend {
-    artifact "React SPA\n(build estático)" as ReactApp
+node "Navegador do usuário" as Browser {
+  artifact "SPA React\n(TypeScript)" as SPA
 }
 
-node "Servidor Backend\n(Render / AWS EC2)" as Backend {
-    artifact "Node.js API\n(PM2 + Docker)" as NodeApp
-    database "PostgreSQL\n(gerenciado)" as DB
+node "Host (máquina local / servidor)" as Host {
+  artifact "Frontend\nReact + Vite (build)" as Front
+  node "Go runtime" as GoRT {
+    component "authServer\n(:3001 — REST + WebSocket)" as Core
+  }
+  node "Node.js" as NodeRT {
+    component "run-audit.mjs\n(Puppeteer)" as Runner
+    component "Chromium\n(N instâncias)" as Chrome
+  }
+  database "MongoDB\n(:27017)" as Mongo
 }
 
 cloud "Internet" {
-    component "API Videoconferência\n(Jitsi/Zoom/WebRTC)" as VideoAPI
+  component "Jitsi (meet.jit.si)" as Jitsi
+  component "Whereby" as Whereby
+  component "Zoom" as Zoom
 }
 
-' --- CORREÇÃO AQUI ---
-' A nota agora é definida diretamente à direita do Frontend
-note right of Frontend : "Hospedagem estática\nBuild automático via GitHub"
+SPA --> Front : HTTP (carrega a SPA)
+SPA --> Core : HTTPS (REST) + WebSocket
+Core --> Mongo : TCP 27017
+Core --> Runner : spawn (processo Node)
+Runner --> Chrome : controla
+Chrome --> Jitsi : HTTPS/WSS (WebRTC)
+Chrome --> Whereby : HTTPS/WSS (WebRTC)
+Chrome --> Zoom : HTTPS/WSS (WebRTC)
 
-note "Container Docker\nPM2 para gerenciamento" as Note2
-Backend .. Note2
-
-
-ReactApp --> NodeApp : "HTTPS (REST)"
-NodeApp --> VideoAPI : "WebSocket / HTTPS"
-NodeApp --> DB : "TCP 5432 (SQL)"
-
+note bottom of Host : Execução em host único (local). Em produção, os mesmos\nartefatos podem ser distribuídos: frontend estático hospedado,\nbackend Go + runner em servidor e MongoDB gerenciado.
 @enduml

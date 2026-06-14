@@ -12,5 +12,5 @@ Dev -- App : 1: configura e inicia teste
 App -- Core : 2: POST /test/start [handleTestStart]
 Core -- Core : 3: validateTechnicalConfig()
 Core -- Runner : 4: runAuditTest() (spawn)
-Runner -- Runner : 5: isJitsiHost() / isWhereby() / isZoomHost()
+Runner -- Runner : 5: ProviderFactory.createProvider() -> IConferenceProvider
 @enduml

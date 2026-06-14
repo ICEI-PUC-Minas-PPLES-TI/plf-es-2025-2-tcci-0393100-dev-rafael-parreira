@@ -1,59 +1,53 @@
 @startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam ranksep 55
+skinparam nodesep 40
 
-interface "REST API" as RestApi
-interface "SQL" as SQL
-interface "WebSocket" as WebSocket
+interface "REST" as IREST
+interface "WebSocket" as IWS
 
-package "Interface Web (React)" {
-  [Dashboard]
-  [Configurar Teste]
-  [Executar Teste]
-  [Relatórios]
-  [Documentação]
+package "Interface Web (React/TypeScript)" {
+  [App.tsx] as App
+  [AuditDashboard.tsx] as Dash
+  [useTelemetryWS.ts] as WSClient
 }
 
-package "StreamSentry Core (Node.js)" {
-  [<<REST API>>\nTestController] as TestController
-  [<<REST API>>\nReportController] as ReportController
-  [<<Service>>\nTestEngine] as TestEngine
-  [<<Service>>\nMetricCollector] as MetricCollector
-  [<<Service>>\nReportGenerator] as ReportGenerator
-  [<<ORM>>\nPostgreSQL Adapter] as OrmAdapter
+package "Servidor Core (Go)" {
+  [authServer\n(handlers REST)] as Core
+  [telemetryHub\n(Hub WebSocket)] as Hub
+  [db.go\n(acesso MongoDB)] as DBaccess
 }
 
-package "Integração Externa" {
-  [<<External>>\nWebRTC Native] as WebRTC
-  [<<External>>\nZoom SDK] as Zoom
-  [<<External>>\nJitsi SDK] as Jitsi
+package "Runner (Node.js / Puppeteer)" {
+  [run-audit.mjs] as Runner
+  [ProviderFactory\nIConferenceProvider] as Providers
 }
 
-[Dashboard] --> RestApi
-[Configurar Teste] --> RestApi
-[Executar Teste] --> RestApi
-[Relatórios] --> RestApi
-[Documentação] --> RestApi
+database "MongoDB\n(users, test_history,\ntelemetry_events)" as Mongo
 
-RestApi --> TestController
+package "Provedores externos" {
+  [Jitsi]
+  [Whereby]
+  [Zoom]
+}
 
-TestEngine -D-> SQL
-ReportGenerator -R-> SQL
+' Frontend -> Core (interfaces REST e WebSocket)
+Dash ..> WSClient
+App --> IREST
+WSClient --> IWS
+IREST -- Core
+IWS -- Hub
 
-SQL --> OrmAdapter
+' Core: persistência e orquestração
+Core --> DBaccess
+Hub --> DBaccess
+DBaccess --> Mongo
+Core --> Runner : spawn / stdout
 
-TestController --> TestEngine
-TestController --> OrmAdapter
-
-ReportController --> ReportGenerator
-
-TestEngine --> MetricCollector
-
-MetricCollector --> WebSocket
-
-WebSocket --> WebRTC
-WebSocket --> Zoom
-WebSocket --> Jitsi
-
-note "Backend central: orquestra testes, métricas e relatórios" as N1
-OrmAdapter .. N1
-
+' Runner -> provedores via Strategy/Factory
+Runner --> Providers
+Providers --> [Jitsi]
+Providers --> [Whereby]
+Providers --> [Zoom]
 @enduml
