@@ -4,25 +4,25 @@ skinparam ParticipantPadding 20
 skinparam MaxMessageSize 150
 
 actor "Equipe Ágil" as Equipe
-participant "Interface de\nRelatórios" as Web
-participant "ReportGenerator\n(Service)" as Generator
-database "PostgreSQL" as DB
+participant "Interface React\n(Relatórios)" as Web
+participant "ReportGenerator\n(Core API, Go)" as Generator
+database "MongoDB" as DB
 
-Equipe -> Web: Solicita exportação (ID, Formato)
+Equipe -> Web: Solicita exportação (ID, formato)
 activate Web
-Web -> Generator: GET /api/export/:uuid?format=csv
+Web -> Generator: GET /reports/export?sessionId=...&format=csv
 activate Generator
 
-Generator -> DB: SELECT Metrics WHERE test_id = UUID
+Generator -> DB: Consulta test_history e telemetry_events (sessionId)
 activate DB
-DB --> Generator: Dataset de Telemetria
+DB --> Generator: Dataset de telemetria
 deactivate DB
 
-Generator -> Generator: Agregar Dados (Média QoE, Falhas)
-Generator -> Generator: Aplicar Estratégia de Formatação (CSV/JSON)
+Generator -> Generator: Agregar dados (média QoE, falhas)
+Generator -> Generator: Aplicar estratégia de formatação (CSV/JSON)
 
 Generator --> Web: Stream do arquivo processado
 deactivate Generator
-Web --> Equipe: Download do Relatório Analítico
+Web --> Equipe: Download do relatório analítico
 deactivate Web
 @enduml

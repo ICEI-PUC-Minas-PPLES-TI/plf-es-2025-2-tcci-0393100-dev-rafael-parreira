@@ -4,33 +4,37 @@ skinparam ParticipantPadding 15
 skinparam MaxMessageSize 150
 
 actor "Engenheiro de QA" as QA
-participant "Dashboard Web\n(React)" as Web
-participant "TestEngine\n(Core)" as Core
+participant "Interface React\n(TypeScript)" as Web
+participant "TestEngine\n(Core API, Go)" as Core
 participant "WorkerNode\n(Puppeteer)" as Worker
 participant "SocketManager\n(WS Hub)" as Socket
-participant "API de Vídeo\n(External)" as Ext
+participant "Sala de Vídeo\n(Jitsi/Whereby/Zoom)" as Ext
+database "MongoDB" as DB
 
 QA -> Web: Clica em "Iniciar Teste"
 activate Web
-Web -> Core: WS: 'test_start'
+Web -> Core: POST /test/start
 activate Core
 
 Core -> Worker: spawn(config)
 activate Worker
-Worker -> Ext: Entrar na Sala (Handshake)
+Worker -> Ext: Entrar na sala (handshake)
 Ext --> Worker: Conexão OK
 
 loop Ciclo de Monitoramento
-    Worker -> Ext: getStats() (WebRTC Internals)
-    Ext --> Worker: Telemetria Raw
-    Worker -> Socket: broadcast('metric_update', data)
-    Socket -> Web: Push Live Data
-    Web -> Web: Atualiza Gráficos Instantaneamente
+    Worker -> Ext: getStats() (WebRTC)
+    Ext --> Worker: Telemetria raw
+    Worker -> Core: Evento 'webrtc_stats' (stdout)
+    Core -> DB: Persiste em telemetry_events
+    Core -> Socket: broadcast
+    Socket -> Web: Push live data (WS)
+    Web -> Web: Atualiza gráficos instantaneamente
 end
 
 Core -> Worker: terminate()
 deactivate Worker
-Core -> Web: WS: 'test_finished'
+Core -> Socket: broadcast 'test_complete' / 'server_audit_summary'
+Socket -> Web: Push (WS)
 deactivate Core
 Web --> QA: Habilita visualização de relatórios
 deactivate Web

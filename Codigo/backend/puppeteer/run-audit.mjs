@@ -906,6 +906,106 @@ function isMultiPageRtcHost(urlStr) {
   return isJitsiHost(urlStr) || isZoomHost(urlStr) || isWhereby(urlStr);
 }
 
+// ── Strategy / Factory de provedores de videoconferência ──────────────────────
+// Cada provedor encapsula a identificação da plataforma e a coleta de métricas
+// WebRTC (getStats), conforme o Diagrama de Classes (IConferenceProvider).
+// A detecção delega às funções isJitsiHost/isWhereby/isZoomHost para preservar
+// exatamente o comportamento atual.
+class IConferenceProvider {
+  constructor(url) {
+    this.apiUrl = url;
+  }
+  static matches(_url) {
+    return false;
+  }
+  get name() {
+    return "generic";
+  }
+  requiresAccessToken() {
+    return true;
+  }
+  isMultiPage() {
+    return false;
+  }
+  async getStats(page, browser) {
+    return this.isMultiPage()
+      ? await collectWebRTCSummaryFromBrowser(browser)
+      : await collectWebRTCSummary(page);
+  }
+}
+
+class JitsiProvider extends IConferenceProvider {
+  static matches(url) {
+    return isJitsiHost(url);
+  }
+  get name() {
+    return "jitsi";
+  }
+  requiresAccessToken() {
+    return false;
+  }
+  isMultiPage() {
+    return true;
+  }
+}
+
+class WherebyProvider extends IConferenceProvider {
+  static matches(url) {
+    return isWhereby(url);
+  }
+  get name() {
+    return "whereby";
+  }
+  requiresAccessToken() {
+    return false;
+  }
+  isMultiPage() {
+    return true;
+  }
+}
+
+class ZoomProvider extends IConferenceProvider {
+  static matches(url) {
+    return isZoomHost(url);
+  }
+  get name() {
+    return "zoom";
+  }
+  requiresAccessToken() {
+    return false;
+  }
+  isMultiPage() {
+    return true;
+  }
+}
+
+class WebRTCProvider extends IConferenceProvider {
+  static matches(_url) {
+    return true; // provedor genérico (fallback)
+  }
+  get name() {
+    return "webrtc";
+  }
+  requiresAccessToken() {
+    return true;
+  }
+  isMultiPage() {
+    return false;
+  }
+}
+
+class ProviderFactory {
+  static createProvider(url) {
+    if (JitsiProvider.matches(url)) return new JitsiProvider(url);
+    if (WherebyProvider.matches(url)) return new WherebyProvider(url);
+    if (ZoomProvider.matches(url)) return new ZoomProvider(url);
+    return new WebRTCProvider(url);
+  }
+}
+
+// Instância única do provedor ativo para esta execução (mesmo apiUrl em todos os VUs).
+const auditProvider = ProviderFactory.createProvider(apiUrl);
+
 function normalizeZoomJoinUrl(urlStr) {
   try {
     const u = new URL(urlStr);
@@ -2995,11 +3095,8 @@ async function runVirtualUser(userId, opts = {}) {
           }
         }
         try {
-          if (isMultiPageRtcHost(apiUrl)) {
-            summary = (await collectWebRTCSummaryFromBrowser(browser)) || emptyWebRtcSummary();
-          } else {
-            summary = (await collectWebRTCSummary(page)) || emptyWebRtcSummary();
-          }
+          // Coleta via Strategy: o provedor ativo decide single-page vs multi-page.
+          summary = (await auditProvider.getStats(page, browser)) || emptyWebRtcSummary();
         } catch (e) {
           statsNote += `collect ${String(e?.message || e).slice(0, 200)}; `;
         }

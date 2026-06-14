@@ -1,26 +1,16 @@
 @startuml
 skinparam shadowing false
-skinparam MaxMessageSize 100
+skinparam nodesep 45
+skinparam ranksep 55
 
 actor "Desenvolvedor React" as Dev
-boundary "Dashboard Web" as Web
-control "Core API\n(Node.js)" as Core
-control "ProviderFactory" as Factory
-entity "IConferenceProvider" as Strategy
-database "PostgreSQL" as DB
+rectangle "App\n(App.tsx)" as App
+rectangle "authServer\n(main.go)" as Core
+rectangle "run-audit.mjs" as Runner
 
-' Layout em Blocos
-Dev -down- Web : "1: Define Parâmetros v"
-Web -down- Core : "2: POST /api/configurar v"
-
-Core -left- Factory : "3: criarProvider() >"
-Factory -down- Strategy : "4: instanciar() v"
-Strategy .up. Factory : "^ 5: Driver"
-Factory .right. Core : "< 6: Pronto"
-
-Core -down- DB : "7: INSERT v"
-DB .up. Core : "^ 8: UUID"
-
-Core .up. Web : "^ 9: 201 Created"
-Web .up. Dev : "^ 10: Sucesso"
+Dev -- App : 1: configura e inicia teste
+App -- Core : 2: POST /test/start [handleTestStart]
+Core -- Core : 3: validateTechnicalConfig()
+Core -- Runner : 4: runAuditTest() (spawn)
+Runner -- Runner : 5: isJitsiHost() / isWhereby() / isZoomHost()
 @enduml

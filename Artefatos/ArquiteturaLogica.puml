@@ -8,11 +8,11 @@ skinparam ranksep 30
 title Stream Sentry - Arquitetura Lógica (Formato Retrato A4)
 
 package "1. Interface Web (React)" #F9F9F9 {
-  component "Views: Landing, Config,\nDashboard, Analytics" as UI
+  component "Views: Landing, Autenticação,\nIniciar Teste, Auditoria, Histórico" as UI
 }
 
 package "2. Servidor Core (Go)" #E8F4FC {
-  component "API REST (auth, reports)" as REST
+  component "API REST (auth, testes, relatórios)" as REST
   component "Hub WebSocket (telemetria)" as WSHub
   component "Orquestrador de Teste" as Orchestrator
   component "Motor de Relatórios" as Reports
@@ -23,22 +23,22 @@ package "2. Servidor Core (Go)" #E8F4FC {
   Orchestrator -[hidden]down-> Reports
 }
 
-package "3. Dados Locais (Ficheiros)" #F5F5E8 {
-  component "Utilizadores & Histórico (JSON)" as UserHist
-  component "Telemetria (NDJSON)" as TelFiles
+package "3. Persistência (MongoDB)" #F5F5E8 {
+  component "users / test_history" as UserHist
+  component "telemetry_events (NDJSON)" as TelFiles
 
   UserHist -[hidden]down-> TelFiles
 }
 
 package "4. Runner de Teste (Node.js)" #F0F0F0 {
-  component "run-audit.mjs" as Script
-  component "Workers (Pool Chromium)" as Workers
+  component "run-audit.mjs (pool)" as Script
+  component "Workers (Chromium / Worker Threads)" as Workers
 
   Script -[hidden]down-> Workers
 }
 
 package "5. Sistemas Externos" #FFFFFF {
-  component "API Alvo (Jitsi, Meet, etc.)" as External
+  component "Salas de Videoconferência\n(Jitsi, Whereby, Zoom)" as External
 }
 
 ' ==========================================
@@ -62,10 +62,10 @@ REST ..> UserHist : Lê/Grava Auth
 
 Orchestrator --> WSHub : Broadcast JSON
 Orchestrator --> Script : Spawn Processo Node
-Orchestrator ..> TelFiles : Persiste NDJSON
+Orchestrator ..> TelFiles : Persiste eventos
 Orchestrator ..> UserHist : Agrega Fim de Teste
 
-Reports ..> TelFiles : Lê NDJSON
+Reports ..> TelFiles : Lê eventos
 Reports ..> UserHist : Lê Histórico
 
 Script ..> Orchestrator : Stdout (Telemetria)

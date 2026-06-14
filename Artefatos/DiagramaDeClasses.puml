@@ -1,6 +1,9 @@
 @startuml
 skinparam linetype ortho
 skinparam classAttributeIconSize 0
+skinparam nodesep 70
+skinparam ranksep 80
+skinparam shadowing false
 
 package "Modelos (Domínio)" {
     class Usuario {
@@ -50,26 +53,30 @@ package "Core (Lógica de Execução)" {
 
 package "Integração & Estratégia" {
     class ProviderFactory {
-        + criarProvider(tipo: string): IConferenceProvider
+        + {static} createProvider(url: string): IConferenceProvider
     }
 
     interface IConferenceProvider {
-        + conectar(token: string): boolean
-        + getStats(): MetricasRaw
+        + {static} matches(url: string): boolean
+        + name: string
+        + requiresAccessToken(): boolean
+        + isMultiPage(): boolean
+        + getStats(page, browser): MetricasRaw
     }
 
     class WebRTCProvider implements IConferenceProvider
-    class ZoomProvider implements IConferenceProvider
     class JitsiProvider implements IConferenceProvider
+    class WherebyProvider implements IConferenceProvider
+    class ZoomProvider implements IConferenceProvider
 }
 
-' Relacionamentos atualizados [cite: 7, 15, 16]
+' Relacionamentos
 Usuario "1" -- "*" Teste : solicita >
 Teste "1" -- "0..1" Relatorio : gera >
 
 TestEngine "1" *-- "*" WorkerNode : gerencia >
-WorkerNode --> ProviderFactory : solicita driver >
+WorkerNode --> ProviderFactory : usa >
 ProviderFactory ..> IConferenceProvider : cria >
-TestEngine ..> SocketManager : utiliza para Live Data >
-WorkerNode ..> SocketManager : envia telemetria raw >
+TestEngine ..> SocketManager : live data >
+WorkerNode ..> SocketManager : telemetria >
 @enduml

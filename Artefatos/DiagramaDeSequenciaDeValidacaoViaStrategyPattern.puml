@@ -3,15 +3,15 @@ hide footbox
 skinparam ParticipantPadding 15
 
 actor "Desenvolvedor React" as Dev
-participant "Dashboard Web" as Web
-participant "Core API\n(Node.js)" as Core
+participant "Interface React\n(TypeScript)" as Web
+participant "Core API\n(Go)" as Core
 participant "ProviderFactory" as Factory
 participant "IConferenceProvider\n(Strategy)" as Strategy
-participant "Banco de Dados" as DB
+database "MongoDB" as DB
 
 Dev -> Web: Define API e Parâmetros
 activate Web
-Web -> Core: POST /api/configurar
+Web -> Core: POST /test/start
 activate Core
 
 Core -> Factory: criarProvider(api_tipo)
@@ -23,12 +23,12 @@ deactivate Strategy
 Factory --> Core: Instância Pronta
 deactivate Factory
 
-Core -> DB: INSERT INTO testes (status: 'configurado')
+Core -> DB: Inserir documento de teste (status: configurado)
 activate DB
-DB --> Core: UUID Gerado
+DB --> Core: ID da sessão gerado
 deactivate DB
 
-Core --> Web: 201 Created (ID)
+Core --> Web: 200 OK (ID da sessão)
 deactivate Core
 Web --> Dev: Notifica Sucesso
 deactivate Web

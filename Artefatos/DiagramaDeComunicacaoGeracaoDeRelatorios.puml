@@ -1,22 +1,16 @@
 @startuml
 skinparam shadowing false
-skinparam MaxMessageSize 100
+skinparam nodesep 45
+skinparam ranksep 55
 
 actor "Equipe Ágil" as Equipe
-boundary "Interface\nRelatórios" as Web
-control "ReportGenerator" as Generator
-database "PostgreSQL" as DB
+rectangle "App\n(App.tsx)" as App
+rectangle "authServer\n(handleExportReports)" as Core
+rectangle "MongoDB\n(test_history, telemetry_events)" as DB
 
-' Distribuição em T
-Equipe -down- Web : "1: Solicita v"
-Web -down- Generator : "2: GET /api/export v"
-
-Generator -left- DB : "3: SELECT <"
-DB .right. Generator : "> 4: Data"
-
-Generator -down- Generator : "5: Agregação v"
-Generator -right- Generator : "6: Formatação >"
-
-Generator .up. Web : "^ 7: Stream"
-Web .up. Equipe : "^ 8: Download"
+Equipe -- App : 1: solicita exportação (handleDownloadReport)\n6: download (JSON/CSV)
+App -- Core : 2: GET /reports/export
+Core -- DB : 3: dbLoadTestHistory() / dbLoadSessionEvents()
+Core -- Core : 4: rollup (TelemetrySessionSummary)
+Core -- App : 5: stream do arquivo (JSON/CSV)
 @enduml
