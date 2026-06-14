@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-
-/** @typedef {{ onTestRunFinished?: () => void; onSessionInvalid?: () => void }} TelemetryWSOptions */
+import type {
+  FeedItem,
+  PerUserSeries,
+  SeriesTimeMs,
+  TelemetryEvent,
+  TelemetryView,
+  TelemetryWSOptions,
+  WebRtcAggregate,
+  WebRtcSeries,
+  WebRtcSummary
+} from "./types";
 
 function buildWsUrl(apiBaseUrl, token) {
   const base = apiBaseUrl.replace(/^http/, "ws").replace(/\/$/, "");
@@ -17,7 +26,7 @@ function avg(nums) {
  * Sinal de WebRTC além de peerConnections (útil quando o hook no Chromium não
  * contou PCs mas getStats ainda traz tráfego).
  */
-export function summaryHasWebrtcActivity(s) {
+export function summaryHasWebrtcActivity(s: WebRtcSummary | null | undefined): boolean {
   if (!s) return false;
   if ((s.peerConnections || 0) > 0) return true;
   const iv = s.inboundVideo;
@@ -40,7 +49,7 @@ export function summaryHasWebrtcActivity(s) {
   return false;
 }
 
-function totalRtcpBytesIn(s) {
+function totalRtcpBytesIn(s: any) {
   if (!s) return 0;
   const rtpBytes = (s.inboundVideo?.bytesReceived || 0) + (s.inboundAudio?.bytesReceived || 0);
   return rtpBytes > 0 ? rtpBytes : s.transport?.bytesReceived || 0;
@@ -50,7 +59,7 @@ function totalRtcpBytesIn(s) {
  * Não deixar um getStats "morno" (sem tráfego ainda) substituir a última leitura
  * com métricas na tabela por utilizador.
  */
-function pickWebrtcSummaryForDisplay(prev, next) {
+function pickWebrtcSummaryForDisplay(prev: any, next: any) {
   if (!next) return prev;
   if (!prev) return next;
   if (summaryHasWebrtcActivity(next)) return next;
@@ -58,7 +67,7 @@ function pickWebrtcSummaryForDisplay(prev, next) {
   return next;
 }
 
-function rttFromSummary(s) {
+function rttFromSummary(s: any) {
   return (
     s.candidatePair?.currentRoundTripTimeMs ??
     s.remoteInbound?.videoRoundTripTimeMs ??
@@ -67,8 +76,10 @@ function rttFromSummary(s) {
 }
 
 /** Média entre utilizadores com atividade — gráficos refletem o teste, não só o último evento. */
-function seriesAveragesFromLastByUser(map) {
-  const rows = Object.values(map).filter((s) => s && summaryHasWebrtcActivity(s));
+function seriesAveragesFromLastByUser(map: any) {
+  const rows: any[] = Object.values(map as Record<string, unknown>).filter(
+    (s: any) => s && summaryHasWebrtcActivity(s)
+  );
   if (!rows.length) return { rtt: null, jitterVideoMs: null, fps: null };
   const rtts = rows.map((r) => rttFromSummary(r)).filter((x) => x != null && Number.isFinite(x));
   const jvs = rows
@@ -83,8 +94,10 @@ function seriesAveragesFromLastByUser(map) {
   };
 }
 
-function aggregateWebRTC(lastByUser) {
-  const rows = Object.values(lastByUser).filter((s) => s && summaryHasWebrtcActivity(s));
+function aggregateWebRTC(lastByUser: any): WebRtcAggregate {
+  const rows: any[] = Object.values(lastByUser as Record<string, unknown>).filter(
+    (s: any) => s && summaryHasWebrtcActivity(s)
+  );
   if (!rows.length) {
     return {
       usersWithRtc: 0,
@@ -120,10 +133,10 @@ function aggregateWebRTC(lastByUser) {
   let bin = 0;
   let bout = 0;
   let pc = 0;
-  let res = null;
-  let aob = null;
-  let fpsIn = null;
-  let fpsOut = null;
+  let res: string | null = null;
+  let aob: number | null = null;
+  let fpsIn: number | null = null;
+  let fpsOut: number | null = null;
 
   for (const r of rows) {
     pc += r.peerConnections || 0;
@@ -167,7 +180,7 @@ function timestampFromEvent(data) {
   return Number.isNaN(parsed) ? Date.now() : parsed;
 }
 
-function emptyTelemetrySnapshot() {
+function emptyTelemetrySnapshot(): TelemetryView {
   return {
     connected: false,
     lastEvent: "",
@@ -193,19 +206,22 @@ function emptyTelemetrySnapshot() {
   };
 }
 
-export function buildTelemetrySnapshotFromEvents(events = [], session = {}) {
+export function buildTelemetrySnapshotFromEvents(
+  events: Array<TelemetryEvent | string> = [],
+  session: Record<string, unknown> = {}
+): TelemetryView {
   const snapshot = emptyTelemetrySnapshot();
   const totals = { req: 0, res: 0, fail: 0 };
-  const statusMap = {};
-  const feed = [];
-  const lastByUser = {};
-  const webrtcSeries = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
-  const webrtcTimeMs = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
-  const cumulativeSeries = [];
-  const cumulativeTimeMs = [];
-  const rpsBuckets = new Map();
+  const statusMap: Record<string, number> = {};
+  const feed: FeedItem[] = [];
+  const lastByUser: Record<string, WebRtcSummary> = {};
+  const webrtcSeries: WebRtcSeries = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+  const webrtcTimeMs: WebRtcSeries = { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] };
+  const cumulativeSeries: number[] = [];
+  const cumulativeTimeMs: number[] = [];
+  const rpsBuckets = new Map<number, number>();
   let bytesTotal = { ts: 0, sumBytes: 0 };
-  let testWallStartMs = Date.parse(session?.startedAt || "");
+  let testWallStartMs: number | null = Date.parse((session?.startedAt as string) || "");
   if (Number.isNaN(testWallStartMs)) testWallStartMs = null;
 
   const pushLimited = (arr, value, cap) => {
@@ -307,13 +323,18 @@ export function buildTelemetrySnapshotFromEvents(events = [], session = {}) {
     webrtc: webrtcTimeMs
   };
   snapshot.testWallStartMs = testWallStartMs;
-  if (!snapshot.activeSessionId && session?.id) snapshot.activeSessionId = session.id;
+  if (!snapshot.activeSessionId && session?.id) snapshot.activeSessionId = String(session.id);
   if (snapshot.testElapsedSec == null && session?.durationSec != null) snapshot.testElapsedSec = Number(session.durationSec);
   snapshot.lastEvent = snapshot.lastEvent || "server_audit_summary";
   return snapshot;
 }
 
-export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
+export function useTelemetryWS(
+  apiBaseUrl: string,
+  token: string,
+  enabled: boolean,
+  options?: TelemetryWSOptions
+): TelemetryView {
   const onTestRunFinishedRef = useRef(options?.onTestRunFinished);
   onTestRunFinishedRef.current = options?.onTestRunFinished;
   const onSessionInvalidRef = useRef(options?.onSessionInvalid);
@@ -323,67 +344,67 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
   const [requestTotal, setRequestTotal] = useState(0);
   const [responseTotal, setResponseTotal] = useState(0);
   const [failTotal, setFailTotal] = useState(0);
-  const [cumulativeSeries, setCumulativeSeries] = useState([]);
-  const [rpsSeries, setRpsSeries] = useState([]);
-  const [statusCounts, setStatusCounts] = useState({});
-  const [feed, setFeed] = useState([]);
+  const [cumulativeSeries, setCumulativeSeries] = useState<number[]>([]);
+  const [rpsSeries, setRpsSeries] = useState<number[]>([]);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [feed, setFeed] = useState<FeedItem[]>([]);
   const [lastEvent, setLastEvent] = useState("");
   const secondBucketRef = useRef({ second: 0, count: 0 });
-  const rpsHistoryRef = useRef([]);
-  const rpsHistoryTimeRef = useRef([]);
-  const lastByUserRef = useRef({});
+  const rpsHistoryRef = useRef<number[]>([]);
+  const rpsHistoryTimeRef = useRef<number[]>([]);
+  const lastByUserRef = useRef<Record<string, WebRtcSummary>>({});
   /** Soma de bytes (todos os VU) + timestamp — taxa recebida coerente com vários browser. */
   const webrtcBytesTotalRef = useRef({ ts: 0, sumBytes: 0 });
-  const webrtcFramesByUserRef = useRef({});
+  const webrtcFramesByUserRef = useRef<Record<string, { ts: number; frames: number }>>({});
   /** Séries por utilizador virtual: { [uid]: { rttMs, jitterVideo, downlinkKbps, fpsIn, timeMs } } */
-  const webrtcPerUserSeriesRef = useRef({});
+  const webrtcPerUserSeriesRef = useRef<Record<string, PerUserSeries>>({});
   /** Bytes anteriores por utilizador para calcular downlink individual. */
-  const prevBytesPerUserRef = useRef({});
+  const prevBytesPerUserRef = useRef<Record<string, { ts: number; sumBytes: number }>>({});
 
-  const [webrtcAggregate, setWebrtcAggregate] = useState(() => aggregateWebRTC({}));
-  const [webrtcSeries, setWebrtcSeries] = useState({
+  const [webrtcAggregate, setWebrtcAggregate] = useState<WebRtcAggregate>(() => aggregateWebRTC({}));
+  const [webrtcSeries, setWebrtcSeries] = useState<WebRtcSeries>({
     rttMs: [],
     jitterVideo: [],
     downlinkKbps: [],
     fpsIn: []
   });
-  const [webrtcLastByUser, setWebrtcLastByUser] = useState({});
-  const [webrtcPerUserSeries, setWebrtcPerUserSeries] = useState({});
-  const [testElapsedSec, setTestElapsedSec] = useState(null);
-  const [elapsedSeries, setElapsedSeries] = useState([]);
+  const [webrtcLastByUser, setWebrtcLastByUser] = useState<Record<string, WebRtcSummary>>({});
+  const [webrtcPerUserSeries, setWebrtcPerUserSeries] = useState<Record<string, PerUserSeries>>({});
+  const [testElapsedSec, setTestElapsedSec] = useState<number | null>(null);
+  const [elapsedSeries, setElapsedSeries] = useState<number[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
-  const [seriesTimeMs, setSeriesTimeMs] = useState({
+  const [seriesTimeMs, setSeriesTimeMs] = useState<SeriesTimeMs>({
     cumulative: [],
     rps: [],
     elapsed: [],
     webrtc: { rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] }
   });
-  const [testWallStartMs, setTestWallStartMs] = useState(null);
+  const [testWallStartMs, setTestWallStartMs] = useState<number | null>(null);
   const [joinedUserCount, setJoinedUserCount] = useState(0);
   const [activeStatsUserCount, setActiveStatsUserCount] = useState(0);
-  const [targetVirtualUsers, setTargetVirtualUsers] = useState(null);
-  const [callStartedAtMs, setCallStartedAtMs] = useState(null);
+  const [targetVirtualUsers, setTargetVirtualUsers] = useState<number | null>(null);
+  const [callStartedAtMs, setCallStartedAtMs] = useState<number | null>(null);
 
   const totalsRef = useRef({ req: 0, res: 0, fail: 0 });
-  const cumulativeListRef = useRef([]);
-  const cumulativeTimeMsRef = useRef([]);
-  const statusMapRef = useRef({});
-  const feedListRef = useRef([]);
+  const cumulativeListRef = useRef<number[]>([]);
+  const cumulativeTimeMsRef = useRef<number[]>([]);
+  const statusMapRef = useRef<Record<string, number>>({});
+  const feedListRef = useRef<FeedItem[]>([]);
   const lastEventRef = useRef("");
   const sessionIdRef = useRef("");
-  const elapsedValueRef = useRef(null);
-  const elapsedListRef = useRef([]);
-  const elapsedTimeMsRef = useRef([]);
+  const elapsedValueRef = useRef<number | null>(null);
+  const elapsedListRef = useRef<number[]>([]);
+  const elapsedTimeMsRef = useRef<number[]>([]);
   const lastElapsedUiAtRef = useRef(0);
-  const webrtcSeriesRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
-  const webrtcTimeMsRef = useRef({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
+  const webrtcSeriesRef = useRef<WebRtcSeries>({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
+  const webrtcTimeMsRef = useRef<WebRtcSeries>({ rttMs: [], jitterVideo: [], downlinkKbps: [], fpsIn: [] });
   /** Usuários que já entraram na chamada (evento user_joined) — usado para só iniciar a
    *  contagem da "duração da chamada" quando todos os VUs tiverem entrado. */
-  const joinedUserIdsRef = useRef(new Set());
+  const joinedUserIdsRef = useRef<Set<string>>(new Set());
   /** Usuários cujas métricas WebRTC já estão ativas (alimentando os gráficos). */
-  const activeStatsUserIdsRef = useRef(new Set());
-  const targetVirtualUsersRef = useRef(null);
-  const callStartedAtRef = useRef(null);
+  const activeStatsUserIdsRef = useRef<Set<string>>(new Set());
+  const targetVirtualUsersRef = useRef<number | null>(null);
+  const callStartedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!enabled || !token) {
@@ -392,7 +413,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
     }
 
     const ac = new AbortController();
-    let ws;
+    let ws: WebSocket | undefined;
     /** ~5 updates/s UI; carga pesada (séries, acumulado) fica no flush, não no onmessage. */
     const FLUSH_MS = 200;
     const ELAPSED_UI_MIN_MS = 500;
@@ -610,7 +631,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
       });
     };
 
-    let flushIv = null;
+    let flushIv: ReturnType<typeof setInterval> | null = null;
     const elapsedDurationIv = setInterval(() => {
       if (clientElapsedRef.current.active) {
         const { wallMs, baseSec } = clientElapsedRef.current;
@@ -979,7 +1000,7 @@ export function useTelemetryWS(apiBaseUrl, token, enabled, options) {
           let sumActive = 0;
           let wrappedFrames = 0;
           let protoFrames = 0;
-          const frameRows = [];
+          const frameRows: any[] = [];
           if (Array.isArray(p.pages)) {
             for (const pg of p.pages) {
               frameRows.push(...(pg.frames || []));

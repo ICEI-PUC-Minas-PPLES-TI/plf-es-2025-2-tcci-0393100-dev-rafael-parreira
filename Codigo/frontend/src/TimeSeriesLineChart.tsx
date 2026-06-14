@@ -1,6 +1,37 @@
-import React, { useCallback, useMemo, useState, useRef, useId } from "react";
+import { useCallback, useMemo, useState, useRef, useId } from "react";
+import type { ChartMultiSeries } from "./types";
 
-const KIND_HINTS = {
+interface ChartPoint {
+  x: number;
+  y: number;
+  v: number;
+  t: number;
+}
+
+type HoverState =
+  | {
+      multi: true;
+      items: { pt: ChartPoint; color: string; userId: string | number }[];
+      xBar: number;
+      t: number;
+    }
+  | { multi?: false; index: number; xSvg: number; ySvg: number }
+  | null;
+
+interface TimeSeriesLineChartProps {
+  values?: number[];
+  timeMs?: number[];
+  label: string;
+  color?: string;
+  unit?: string;
+  testWallStartMs?: number | null;
+  metricKind?: string | null;
+  formatValue?: (v: number) => string;
+  unavailableMessage?: string;
+  multiSeries?: ChartMultiSeries[] | null;
+}
+
+const KIND_HINTS: Record<string, { high?: number; veryHigh?: number; low?: number; veryLow?: number; unit?: string }> = {
   rtt: { high: 200, veryHigh: 400, unit: "ms" },
   jitterVideo: { high: 30, veryHigh: 80, unit: "ms" },
   downlinkKbps: { high: 500, veryHigh: 2000, unit: "kbps" },
@@ -48,7 +79,13 @@ function defaultFormatValue(v, unit) {
   return unit ? `${v.toFixed(2)} ${unit}` : String(v);
 }
 
-function buildTags(values, kind) {
+interface ChartTag {
+  key: string;
+  text: string;
+  tone: "ok" | "warn" | "bad";
+}
+
+function buildTags(values: number[], kind: string | null): ChartTag[] {
   if (!values.length || !kind || kind === "cumulative" || kind === "elapsed") {
     if (kind === "cumulative" && values.length >= 2) {
       const last = values[values.length - 1] ?? 0;
@@ -62,21 +99,21 @@ function buildTags(values, kind) {
   if (!h) return [];
   const maxV = Math.max(...values, 0);
   const minV = values.length ? Math.min(...values) : 0;
-  const tags = [];
+  const tags: ChartTag[] = [];
   if (kind === "rtt" || kind === "jitterVideo") {
-    if (maxV >= (h.veryHigh || 99999)) {
+    if (maxV >= (h.veryHigh ?? 99999)) {
       tags.push({ key: "vh", text: kind === "rtt" ? "RTT muito alto" : "Jitter muito alto", tone: "bad" });
-    } else if (maxV >= h.high) {
+    } else if (maxV >= (h.high ?? 99999)) {
       tags.push({ key: "h", text: kind === "rtt" ? "Alta latência (RTT)" : "Jitter acentuado", tone: "warn" });
     }
   }
-  if (kind === "downlinkKbps" && maxV >= (h.veryHigh || 2000)) {
+  if (kind === "downlinkKbps" && maxV >= (h.veryHigh ?? 2000)) {
     tags.push({ key: "bw", text: "Pico de taxa recebida", tone: "ok" });
   }
-  if (kind === "fpsIn" && minV < (h.veryLow || 0) && maxV > 0) {
+  if (kind === "fpsIn" && minV < (h.veryLow ?? 0) && maxV > 0) {
     tags.push({ key: "fl", text: "FPS baixo nalguns momentos", tone: "warn" });
   }
-  if (kind === "rps" && maxV >= h.high) {
+  if (kind === "rps" && maxV >= (h.high ?? 99999)) {
     tags.push({ key: "burst", text: "Pico de requisições", tone: "warn" });
   }
   return tags.slice(0, 3);
@@ -107,14 +144,14 @@ export default function TimeSeriesLineChart({
   formatValue: formatValueProp,
   unavailableMessage = "",
   multiSeries = null
-}) {
+}: TimeSeriesLineChartProps) {
   const fmt = useCallback(
-    (v) => (formatValueProp ? formatValueProp(v) : defaultFormatValue(v, unit)),
+    (v: number) => (formatValueProp ? formatValueProp(v) : defaultFormatValue(v, unit)),
     [formatValueProp, unit]
   );
 
-  const wrapRef = useRef(null);
-  const [hover, setHover] = useState(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<HoverState>(null);
   const gradId = useId().replace(/:/g, "");
 
   // ── Multi-series aligned data ────────────────────────────────────────────
@@ -207,7 +244,7 @@ export default function TimeSeriesLineChart({
   }, [aligned.pts]);
 
   // ── Hover handlers ────────────────────────────────────────────────────────
-  const onMove = (e) => {
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!wrapRef.current) return;
     const rect = wrapRef.current.getBoundingClientRect();
     const xSvg = ((e.clientX - rect.left) / rect.width) * W;
@@ -216,15 +253,17 @@ export default function TimeSeriesLineChart({
       const { tMin, tMax, perS } = alignedMulti;
       const tSpan = tMax - tMin || 1;
       const hoverT = tMin + ((xSvg - padL) / innerW) * tSpan;
-      const items = perS.map((s) => {
-        if (!s.pts.length) return null;
-        let best = 0, bestDt = Infinity;
-        for (let i = 0; i < s.pts.length; i++) {
-          const dt = Math.abs(s.pts[i].t - hoverT);
-          if (dt < bestDt) { bestDt = dt; best = i; }
-        }
-        return { pt: s.pts[best], color: s.color, userId: s.userId };
-      }).filter(Boolean);
+      const items = perS
+        .map((s) => {
+          if (!s.pts.length) return null;
+          let best = 0, bestDt = Infinity;
+          for (let i = 0; i < s.pts.length; i++) {
+            const dt = Math.abs(s.pts[i].t - hoverT);
+            if (dt < bestDt) { bestDt = dt; best = i; }
+          }
+          return { pt: s.pts[best], color: s.color, userId: s.userId };
+        })
+        .filter((it): it is { pt: ChartPoint; color: string; userId: string | number } => it != null);
       if (items.length) setHover({ multi: true, items, xBar: items[0].pt.x, t: items[0].pt.t });
     } else if (aligned.pts.length) {
       let best = 0, bestD = Infinity;

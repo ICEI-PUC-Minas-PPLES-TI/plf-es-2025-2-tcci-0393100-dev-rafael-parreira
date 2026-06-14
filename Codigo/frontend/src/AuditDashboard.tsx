@@ -1,6 +1,50 @@
-import React, { useEffect, useState } from "react";
-import { summaryHasWebrtcActivity } from "./useTelemetryWS.js";
-import TimeSeriesLineChart from "./TimeSeriesLineChart.jsx";
+import { useEffect, useState } from "react";
+import { summaryHasWebrtcActivity } from "./useTelemetryWS";
+import TimeSeriesLineChart from "./TimeSeriesLineChart";
+import type {
+  FeedItem,
+  PerUserSeries,
+  SeriesTimeMs,
+  WebRtcAggregate,
+  WebRtcSeries,
+  WebRtcSummary
+} from "./types";
+
+interface AuditDashboardProps {
+  connected: boolean;
+  lastEvent: string;
+  requestTotal: number;
+  responseTotal: number;
+  failTotal: number;
+  cumulativeSeries: number[];
+  rpsSeries: number[];
+  statusCounts: Record<string, number>;
+  feed: FeedItem[];
+  webrtcAggregate: WebRtcAggregate;
+  webrtcSeries: WebRtcSeries;
+  webrtcPerUserSeries?: Record<string, PerUserSeries>;
+  webrtcLastByUser: Record<string, WebRtcSummary>;
+  liveTestRunning: boolean;
+  testElapsedSec: number | null;
+  callDurationSec?: number | null;
+  joinedUserCount?: number;
+  activeStatsUserCount?: number;
+  targetVirtualUsers?: number | null;
+  callStartedAtMs?: number | null;
+  activeSessionId: string;
+  auditTargetUsers: number;
+  auditChaos: string;
+  onAuditTargetChange: (n: number) => void;
+  onAuditChaosChange: (profile: string) => void;
+  onApplyControl: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  controlBusy: boolean;
+  onInjectChaos?: (profile: string) => void;
+  seriesTimeMs?: SeriesTimeMs;
+  testWallStartMs?: number | null;
+  historical?: boolean;
+}
 
 function fmtMs(v) {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -64,7 +108,7 @@ function statusCodeClass(status) {
   return "status-code--2xx";
 }
 
-function StatusBars({ counts }) {
+function StatusBars({ counts }: { counts: Record<string, number> }) {
   const entries = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
   if (!entries.length) {
     return <p className="muted-small">Nenhuma resposta HTTP ainda.</p>;
@@ -89,19 +133,19 @@ const UNAVAILABLE_LABEL = "Indisponível neste alvo";
 const UNAVAILABLE_INFO =
   "Esta métrica depende de estatísticas RTP/vídeo que o alvo atual não expõe ao navegador. No Zoom web público, normalmente ficam disponíveis apenas RTT e bytes de transporte.";
 
-function WebRTCKpis({ agg, mediaStatsUnavailable }) {
+function WebRTCKpis({ agg, mediaStatsUnavailable }: { agg: WebRtcAggregate; mediaStatsUnavailable: boolean }) {
   const lossRate =
     agg.packetsReceivedTotal > 0
       ? (100 * agg.packetsLostTotal) / (agg.packetsLostTotal + agg.packetsReceivedTotal)
       : null;
 
-  const maybeUnavailable = (value, info) => ({
+  const maybeUnavailable = (value: string, info: string) => ({
     value: mediaStatsUnavailable ? UNAVAILABLE_LABEL : value,
     info: mediaStatsUnavailable ? `${info} ${UNAVAILABLE_INFO}` : info,
     unavailable: mediaStatsUnavailable
   });
 
-  const items = [
+  const items: { label: string; value: string; info: string; unavailable?: boolean }[] = [
     {
       label: "RTT (par candidato / remoto)",
       value: fmtMs(agg.roundTripTimeMs),
@@ -202,7 +246,7 @@ function WebRTCKpis({ agg, mediaStatsUnavailable }) {
   );
 }
 
-function WebRTCByUserTable({ lastByUser }) {
+function WebRTCByUserTable({ lastByUser }: { lastByUser: Record<string, WebRtcSummary> }) {
   const rows = Object.entries(lastByUser)
     .map(([id, s]) => ({ id, ...s }))
     .filter((r) => summaryHasWebrtcActivity(r));
@@ -265,7 +309,17 @@ const CHAOS_QUICK = [
   { value: "flaky", label: "Instável" }
 ];
 
-function getAuditStatus({ connected, liveTestRunning, lastEvent, historical }) {
+function getAuditStatus({
+  connected,
+  liveTestRunning,
+  lastEvent,
+  historical
+}: {
+  connected: boolean;
+  liveTestRunning: boolean;
+  lastEvent: string;
+  historical: boolean;
+}) {
   if (historical) return { label: "Concluído", tone: "done" };
   if (lastEvent === "test_complete" || lastEvent === "server_audit_summary") return { label: "Finalizado", tone: "done" };
   if (lastEvent === "test_stopped") {
@@ -350,7 +404,7 @@ export default function AuditDashboard({
   seriesTimeMs = { cumulative: [], rps: [], elapsed: [], webrtc: {} },
   testWallStartMs = null,
   historical = false
-}) {
+}: AuditDashboardProps) {
   const auditStatus = getAuditStatus({ connected, liveTestRunning, lastEvent, historical });
 
   const [callNowMs, setCallNowMs] = useState(() => Date.now());

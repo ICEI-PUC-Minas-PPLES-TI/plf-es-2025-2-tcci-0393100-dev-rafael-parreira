@@ -815,7 +815,7 @@ h1 {
 .webrtc-chart-note {
   margin: 0 0 0.6rem;
   line-height: 1.4;
-  max-width: 52ch;
+  max-width: 100%;
 }
 
 /* ── WebRTC KPI grid ────────────────────────────────────────── */

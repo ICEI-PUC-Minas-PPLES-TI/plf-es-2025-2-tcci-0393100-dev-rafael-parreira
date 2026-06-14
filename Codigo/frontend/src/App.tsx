@@ -1,18 +1,26 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import logo from "../Logo.svg";
 import AuditDashboard from "./AuditDashboard";
 import LandingPage from "./LandingPage";
-import { buildTelemetrySnapshotFromEvents, useTelemetryWS } from "./useTelemetryWS.js";
+import { buildTelemetrySnapshotFromEvents, useTelemetryWS } from "./useTelemetryWS";
+import type {
+  ApiError,
+  ConfigForm,
+  HistoricalAudit,
+  TestHistoryRecord,
+  ValidatedConfig
+} from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
-const sampleConfig = {
+const sampleConfig: ConfigForm = {
   apiUrl: "https://example.org",
   accessToken: "demo_token_stream_sentry_123",
-  virtualUsers: 12
+  virtualUsers: 12,
+  callDurationSec: 90
 };
 
-const Logo = ({ onClick }) => (
+const Logo = ({ onClick }: { onClick?: () => void }) => (
   <div
     className="logo-container"
     style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: "20px" }}
@@ -46,8 +54,8 @@ async function post(path, body) {
   return data;
 }
 
-function makeApiError(data, response, defaultMsg = "request failed") {
-  const err = new Error((data && data.message) || defaultMsg);
+function makeApiError(data: any, response: Response, defaultMsg = "request failed"): ApiError {
+  const err = new Error((data && data.message) || defaultMsg) as ApiError;
   err.unauthorized = response.status === 401;
   return err;
 }
@@ -128,7 +136,7 @@ function isTokenOptional(url) {
   return isWherebyUrl(url) || isJitsiUrl(url);
 }
 
-function validateConfig(config) {
+function validateConfig(config: ConfigForm): ValidatedConfig {
   const users = Number(config.virtualUsers);
   if (!Number.isInteger(users) || users < 1 || users > 50) {
     throw new Error("O número de usuários deve estar entre 1 e 50.");
@@ -171,26 +179,31 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [registerForm, setRegisterForm] = useState({ name: "", email: "", password: "" });
   const [puppeteerLoading, setPuppeteerLoading] = useState(false);
-  const [puppeteerResult, setPuppeteerResult] = useState(null);
+  const [puppeteerResult, setPuppeteerResult] = useState<{
+    finalUrl?: string;
+    statusCode?: number;
+    title?: string;
+    executedAt?: string;
+  } | null>(null);
   const [wherebyCreating, setWherebyCreating] = useState(false);
   const [jitsiCreating, setJitsiCreating] = useState(false);
   const [testStarting, setTestStarting] = useState(false);
   const [testStopping, setTestStopping] = useState(false);
   const [liveTestRunning, setLiveTestRunning] = useState(false);
   const [activeTestSessionId, setActiveTestSessionId] = useState("");
-  const [activeTestElapsedSec, setActiveTestElapsedSec] = useState(null);
+  const [activeTestElapsedSec, setActiveTestElapsedSec] = useState<number | null>(null);
   const [chaosProfile, setChaosProfile] = useState("off");
   const [headfulMode, setHeadfulMode] = useState(() => localStorage.getItem("streamSentryHeadful") === "1");
   const [auditTargetUsers, setAuditTargetUsers] = useState(1);
   const [auditChaos, setAuditChaos] = useState("off");
   const [controlBusy, setControlBusy] = useState(false);
-  const [historyItems, setHistoryItems] = useState([]);
+  const [historyItems, setHistoryItems] = useState<TestHistoryRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
-  const [historicalAudit, setHistoricalAudit] = useState(null);
+  const [historicalAudit, setHistoricalAudit] = useState<HistoricalAudit | null>(null);
   const [historicalAuditLoading, setHistoricalAuditLoading] = useState(false);
 
-  const [configForm, setConfigForm] = useState(() => {
+  const [configForm, setConfigForm] = useState<ConfigForm>(() => {
     const savedConfig = localStorage.getItem("streamSentryTechConfig");
     if (!savedConfig) {
       return { apiUrl: apiBaseUrl, accessToken: "", virtualUsers: 10, callDurationSec: 90 };
@@ -208,7 +221,7 @@ export default function App() {
     }
   });
 
-  const setMessage = (message, type = "") => {
+  const setMessage = (message: string, type = "") => {
     setFeedback(message);
     setFeedbackType(type);
   };
@@ -530,7 +543,10 @@ export default function App() {
     }
   }
 
-  async function handleDownloadReport(format, opts = {}) {
+  async function handleDownloadReport(
+    format: string,
+    opts: { includeEvents?: boolean; sessionId?: string | null } = {}
+  ) {
     const { includeEvents = false, sessionId = null } = opts;
     try {
       setReportBusy(true);
@@ -1179,6 +1195,11 @@ export default function App() {
                 activeSessionId={historicalAudit.snapshot.activeSessionId}
                 auditTargetUsers={0}
                 auditChaos={historicalAudit.session?.chaosProfile || "off"}
+                onAuditTargetChange={() => {}}
+                onAuditChaosChange={() => {}}
+                onApplyControl={() => {}}
+                onPause={() => {}}
+                onResume={() => {}}
                 controlBusy={false}
                 seriesTimeMs={historicalAudit.snapshot.seriesTimeMs}
                 testWallStartMs={historicalAudit.snapshot.testWallStartMs}

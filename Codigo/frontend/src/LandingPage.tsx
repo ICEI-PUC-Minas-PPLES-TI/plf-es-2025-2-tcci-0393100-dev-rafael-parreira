@@ -1,7 +1,21 @@
-import React from "react";
+import type { ReactNode } from "react";
 import logo from "../Logo.svg";
 
-const ICONS = {
+type IconName = "webrtc" | "chaos" | "reports" | "load";
+
+interface Feature {
+  icon: IconName;
+  title: string;
+  text: string;
+  items: string[];
+}
+
+interface LandingPageProps {
+  onEntrar: () => void;
+  onRegisto: () => void;
+}
+
+const ICONS: Record<IconName, ReactNode> = {
   webrtc: (
     <path d="M5 7.5A3.5 3.5 0 0 1 8.5 4h7A3.5 3.5 0 0 1 19 7.5v4a3.5 3.5 0 0 1-3.5 3.5h-2.2L9 18v-3H8.5A3.5 3.5 0 0 1 5 11.5v-4Zm4 1.25h6m-6 3h3.5" />
   ),
@@ -10,7 +24,7 @@ const ICONS = {
   load: <path d="M4 16.5 8.5 12l3 3L20 6.5M5 6h4m-4 3h7m-7 3h3" />
 };
 
-const FEATURES = [
+const FEATURES: Feature[] = [
   {
     icon: "webrtc",
     title: "WebRTC",
@@ -37,7 +51,7 @@ const FEATURES = [
   }
 ];
 
-function FeatureIcon({ name }) {
+function FeatureIcon({ name }: { name: IconName }) {
   return (
     <span className="landing-feature-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" role="img">
@@ -47,7 +61,7 @@ function FeatureIcon({ name }) {
   );
 }
 
-export default function LandingPage({ onEntrar, onRegisto }) {
+export default function LandingPage({ onEntrar, onRegisto }: LandingPageProps) {
   return (
     <div className="landing-page">
       <header className="landing-masthead">
