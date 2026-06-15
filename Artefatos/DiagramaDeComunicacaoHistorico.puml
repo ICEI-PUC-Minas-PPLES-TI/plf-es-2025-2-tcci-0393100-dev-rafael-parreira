@@ -1,0 +1,17 @@
+@startuml
+skinparam shadowing false
+skinparam nodesep 45
+skinparam ranksep 55
+
+actor "Equipe Ágil" as Equipe
+rectangle "App\n(App.tsx)" as Web
+rectangle "authServer\n(main.go)" as Core
+rectangle "MongoDB\n(test_history, telemetry_events)" as DB
+
+Equipe -- Web : 1: abrir Histórico / clicar "Ver auditoria"
+Web -- Core : 2: GET /tests/history
+Core -- DB : 3: dbLoadTestHistory()
+Web -- Core : 4: GET /reports/session/{id}
+Core -- DB : 5: dbFindTestHistoryRecord() / dbLoadSessionEvents()
+Web -- Web : 6: buildTelemetrySnapshotFromEvents() (reconstrói a auditoria)
+@enduml

@@ -1,66 +1,56 @@
 @startuml
+skinparam shadowing false
+skinparam linetype ortho
+title Modelo de Dados (MongoDB) - Stream Sentry
 
-' Definição das Entidades (Tabelas)
-entity Usuario {
-  **ID : UUID <<PK>>**
+' Coleções do MongoDB (modelo documental)
+entity "users" as users {
+  id : int <<PK>>
   --
-  nome : VARCHAR(100)
-  email : VARCHAR(100) <<unique>>
-  senha_hash : VARCHAR(255)
-  funcao : ENUM('DEV','QA','PESQUISADOR','EQUIPE')
-  ativo : BOOLEAN
-  criado_em : TIMESTAMP
+  name : string
+  email : string <<unique>>
+  password_hash : string
 }
 
-entity ConfiguracaoAPI {
-  **ID : UUID <<PK>>**
+entity "counters" as counters {
+  _id : string <<PK>>
   --
-  usuario_id : UUID <<FK>>
-  api_tipo : ENUM('WEBRTC','JITSI','ZOOM')
-  endpoint : VARCHAR(255)
-  max_usuarios_simultaneos : INT
+  seq : int
 }
 
-entity Teste {
-  **ID : UUID <<PK>>**
+entity "test_history" as hist {
+  id : string <<PK>>  (sessionId)
   --
-  usuario_id : UUID <<FK>>
-  quantidade_usuarios : INT
-  api_tipo : ENUM('WEBRTC','JITSI','ZOOM')
-  duracao_min : INT
-  status : ENUM('CONFIGURADO','EXECUTANDO','CONCLUIDO','FALHO')
-  iniciado_em : TIMESTAMP
-  concluido_em : TIMESTAMP
+  startedAt : ISODate
+  endedAt : ISODate
+  durationSec : float
+  apiUrl : string
+  virtualUsers : int
+  chaosProfile : string
+  exitOk : bool
+  summary : objeto (embutido)
 }
 
-entity Relatorio {
-  **ID : UUID <<PK>>**
+entity "telemetry_events" as events {
+  sessionId : string <<ref>>
+  seq : int
   --
-  teste_id : UUID <<FK>> **<<unique>>**
-  latencia_media_ms : FLOAT
-  taxa_falhas_percent : FLOAT
-  cobertura_testes_percent : FLOAT
-  caminho_arquivo_json : VARCHAR(255)
-  caminho_arquivo_csv : VARCHAR(255)
-  gerado_em : TIMESTAMP
+  event : string
+  raw : string (NDJSON)
 }
 
-' Relacionamentos
-' Cada Teste TEM UM Usuario (1..1 obrigatório)
-' Cada Usuario TEM 0 ou mais Testes (0..N)
-Usuario "1" --o "*" Teste : realiza
+' Relacionamento por referência: cada evento aponta para a sessão (sessionId = test_history.id)
+hist "1" --o "*" events : sessionId
 
-' Cada ConfiguracaoAPI TEM UM Usuario (1..1 obrigatório)
-' Cada Usuario TEM 0 ou mais ConfiguracoesAPI (0..N)
-Usuario "1" --o "*" ConfiguracaoAPI : possui
+note right of hist
+  summary é um subdocumento embutido
+  (TelemetrySessionSummary): agregados
+  de HTTP e WebRTC (RTT, jitter, etc.)
+end note
 
-' Cada Teste TEM UM Relatorio (1..1 obrigatório)
-' Cada Relatorio TEM UM Teste (1..1 obrigatório - Chave Estrangeira Única em Relatorio garante isso)
-Teste "1" -- "1" Relatorio : gera
-
-' Nota sobre o Status
-note bottom of Teste
-  Status gerenciado por flags no BD
+note bottom of users
+  Coleção usada na autenticação (JWT).
+  counters fornece o id incremental de usuário.
 end note
 
 @enduml

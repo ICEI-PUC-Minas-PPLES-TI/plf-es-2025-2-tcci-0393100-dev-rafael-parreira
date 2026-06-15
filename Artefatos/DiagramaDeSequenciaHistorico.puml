@@ -1,0 +1,35 @@
+@startuml
+hide footbox
+skinparam ParticipantPadding 18
+skinparam MaxMessageSize 150
+
+actor "Equipe Ágil" as Equipe
+participant "Interface React\n(App)" as Web
+participant "authServer\n(Core API, Go)" as Core
+database "MongoDB" as DB
+
+Equipe -> Web: Abrir aba Histórico
+activate Web
+Web -> Core: GET /tests/history
+activate Core
+Core -> DB: dbLoadTestHistory()  (coleção test_history)
+activate DB
+DB --> Core: lista de sessões
+deactivate DB
+Core --> Web: histórico de testes
+deactivate Core
+Web --> Equipe: exibe a tabela de sessões
+
+Equipe -> Web: Clicar em "Ver auditoria"
+Web -> Core: GET /reports/session/{id}
+activate Core
+Core -> DB: dbFindTestHistoryRecord() + dbLoadSessionEvents()\n(test_history + telemetry_events)
+activate DB
+DB --> Core: registro + eventos (NDJSON)
+deactivate DB
+Core --> Web: dados da sessão
+deactivate Core
+Web -> Web: buildTelemetrySnapshotFromEvents()\n(reconstrói a auditoria)
+Web --> Equipe: exibe a auditoria histórica
+deactivate Web
+@enduml

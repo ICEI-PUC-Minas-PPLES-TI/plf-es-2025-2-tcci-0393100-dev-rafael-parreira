@@ -1,0 +1,21 @@
+@startuml
+skinparam shadowing false
+skinparam nodesep 45
+skinparam ranksep 55
+
+actor "Engenheiro de QA" as QA
+rectangle "App\n(App.tsx)" as Web
+rectangle "authServer\n(main.go)" as Core
+rectangle "control.json" as Ctrl
+rectangle "run-audit.mjs\n(pool de VUs)" as Runner
+rectangle "telemetryHub\n(main.go)" as Hub
+
+QA -- Web : 1: ajustar concorrência/chaos ou pausar/retomar/finalizar
+Web -- Core : 2: POST /test/control | /test/pause | /test/resume | /test/stop
+Core -- Ctrl : 3: mergeWriteAuditControl()
+Runner -- Ctrl : 4: readControlSync() (polling ~1s)
+Runner -- Runner : 5: ajusta pool / aplica chaos via CDP / pausa dwell
+Core -- Runner : 6: cancela processo (em /test/stop)
+Core -- Hub : 7: broadcast 'test_stopped'
+Hub -- Web : 8: push (WebSocket)
+@enduml
