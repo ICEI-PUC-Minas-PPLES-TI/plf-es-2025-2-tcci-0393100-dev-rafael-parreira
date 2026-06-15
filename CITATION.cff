@@ -1,31 +1,39 @@
-cff-version: 1.0.1
-message: Please cite this software using these metadata.
-title: 
+cff-version: 1.2.0
+message: "Se você utilizar este software, por favor cite-o conforme os metadados abaixo."
+title: "Stream Sentry"
+abstract: >-
+  Ferramenta web open-source para automação de testes end-to-end e
+  monitoramento de qualidade de experiência (QoE) em aplicações de
+  videoconferência baseadas em WebRTC, com suporte a Jitsi, Whereby e Zoom.
 authors:
-  - family-names: 
-    given-names: 
-  - family-names: 
-    given-names: 
-  - family-names: 
-    given-names: 
-  - family-names: 
-    given-names: 
-  - family-names: 
-    given-names: 
-  - family-names: 
-    given-names:
-  - name-suffix: Professor
-    affiliation: PUC Minas
-    family-names: 
-    given-names: 
-  - name-suffix: Professor
-    affiliation: PUC Minas
-    family-names: 
-    given-names: 
+  - family-names: "Parreira Chequer"
+    given-names: "Rafael"
+    affiliation: "PUC Minas"
+    email: "rafaelpchequer@gmail.com"
+  - name-suffix: "Professor (orientador)"
+    family-names: "Silva Tavares"
+    given-names: "Cleiton"
+    affiliation: "PUC Minas"
+  - name-suffix: "Professor (orientador)"
+    family-names: "de Quadros Maia Filho"
+    given-names: "Danilo"
+    affiliation: "PUC Minas"
+  - name-suffix: "Professor (orientador)"
+    family-names: "Vilela Cardoso"
+    given-names: "Leonardo"
+    affiliation: "PUC Minas"
+  - name-suffix: "Professor (orientador)"
+    family-names: "Ramos Dias Costa"
+    given-names: "Raphael"
+    affiliation: "PUC Minas"
 keywords:
-  - 
-  - 
-repository-code: 
-license: CC-BY-4.0
-version: 1.0.0
-date-released: 2022-07-14
+  - WebRTC
+  - testes end-to-end
+  - videoconferência
+  - telemetria
+  - qualidade de experiência (QoE)
+  - Puppeteer
+repository-code: "https://github.com/ICEI-PUC-Minas-PPLES-TI/plf-es-2025-2-tcci-0393100-dev-rafael-parreira"
+license: MIT
+version: "2.0"
+date-released: "2026-06-14"
