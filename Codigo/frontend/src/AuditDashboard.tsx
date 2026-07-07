@@ -586,7 +586,7 @@ export default function AuditDashboard({
           <span className="kpi-label">Respostas HTTP</span>
         </div>
         <div className="kpi">
-          <span className="kpi-value">{failTotal}</span>
+          <span className={`kpi-value${failTotal > 0 ? " kpi-value--danger" : ""}`}>{failTotal}</span>
           <span className="kpi-label">Falhas de rede</span>
         </div>
       </div>

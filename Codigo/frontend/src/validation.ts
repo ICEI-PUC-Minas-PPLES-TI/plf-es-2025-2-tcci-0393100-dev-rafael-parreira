@@ -26,14 +26,14 @@ export function isTokenOptional(url: string): boolean {
 export function validateConfig(config: ConfigForm): ValidatedConfig {
   const users = Number(config.virtualUsers);
   if (!Number.isInteger(users) || users < 1 || users > 50) {
-    throw new Error("O número de usuários deve estar entre 1 e 50.");
+    throw new Error("O número de usuários deve ser no mínimo 1 e no máximo 50.");
   }
   if (isWherebyUrl(config.apiUrl) && users > 4) {
     throw new Error("O Whereby no plano gratuito permite no máximo 4 usuários simultâneos.");
   }
   const callDurationSec = Number(config.callDurationSec);
   if (!Number.isInteger(callDurationSec) || callDurationSec < 90 || callDurationSec > 1800) {
-    throw new Error("A duração da chamada deve estar entre 90 segundos (1min30s) e 1800 segundos.");
+    throw new Error("A duração da chamada deve ser no mínimo 90 segundos (1min30s) e no máximo 1800 segundos (30min).");
   }
   try {
     const parsedUrl = new URL(config.apiUrl);

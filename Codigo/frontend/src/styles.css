@@ -714,8 +714,12 @@ h1 {
   display: block;
   font-size: 1.5rem;
   font-weight: 700;
-  color: var(--primary);
+  color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.kpi-value--danger {
+  color: var(--danger);
 }
 
 .kpi-label {
@@ -1107,7 +1111,7 @@ h1 {
 .duration-value {
   font-size: 1.45rem;
   font-variant-numeric: tabular-nums;
-  color: #86efac;
+  color: var(--text);
   font-weight: 700;
 }
 
