@@ -4,26 +4,16 @@ skinparam ParticipantPadding 20
 
 actor "Usuário" as User
 participant "Sistema\nStreamSentry" as Sistema
-database "Banco de Dados" as DB
 
-alt Cadastro de Novo Usuário
-    User -> Sistema: cadastrarUsuario(nome, email, senha)
-    activate Sistema
-    Sistema -> DB: Verificar e-mail e persistir usuário
-    activate DB
-    DB --> Sistema: Confirmação de Registro
-    deactivate DB
-    Sistema --> User: Conta Criada com Sucesso
-    deactivate Sistema
-else Realizar Login
-    User -> Sistema: realizarLogin(email, senha)
-    activate Sistema
-    Sistema -> DB: Validar credenciais (Hash Check)
-    activate DB
-    DB --> Sistema: Dados do Usuário / OK
-    deactivate DB
+User -> Sistema: realizarLogin(email, senha)
+activate Sistema
+Sistema -> Sistema: Validar credenciais
+
+alt Credenciais válidas
     Sistema -> Sistema: Gerar Token JWT
     Sistema --> User: Token de Acesso (Sessão Iniciada)
-    deactivate Sistema
+else Credenciais inválidas
+    Sistema --> User: Erro de autenticação (credenciais inválidas)
 end
+deactivate Sistema
 @enduml

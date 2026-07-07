@@ -2,19 +2,18 @@
 hide footbox
 skinparam ParticipantPadding 20
 
-actor "Equipe Ágil" as Equipe
+actor "Desenvolvedor React" as Dev
 participant "Sistema\nStreamSentry" as Sistema
-database "Banco de Dados" as DB
 
-Equipe -> Sistema: solicitarRelatorio(idTeste, formato)
+Dev -> Sistema: configurarTeste(url, usuariosVirtuais, duracao, provedor)
 activate Sistema
+Sistema -> Sistema: Validar parâmetros e selecionar provedor
+Sistema --> Dev: Configuração validada
 
-Sistema -> DB: Consultar histórico de métricas
-activate DB
-DB --> Sistema: Dados Brutos
-deactivate DB
-
-Sistema -> Sistema: Consolidar Médias e Formatar Arquivo
-Sistema --> Equipe: Download do arquivo (JSON/CSV)
+opt Executar Smoke Test
+    Dev -> Sistema: executarSmokeTest()
+    Sistema -> Sistema: Verificar acesso ao alvo e à sala
+    Sistema --> Dev: Resultado do smoke test (acessível ou falha)
+end
 deactivate Sistema
 @enduml

@@ -9,7 +9,7 @@ QA -> Sistema: iniciarTeste(UUID)
 activate Sistema
 Sistema --> QA: Confirmar Início (Status: EXECUTANDO)
 
-loop Durante a Duração do Teste
+loop Durante a execução do teste
     Sistema -> QA: Enviar métricas de performance (Live Data)
 
     opt Injeção de Instabilidade
