@@ -1,53 +1,64 @@
 @startuml
-skinparam componentStyle rectangle
-skinparam shadowing false
-skinparam ranksep 55
-skinparam nodesep 40
+' Diagrama de Componentes (notacao UML): componentes com icone,
+' interfaces providas (pirulito) / requeridas (soquete) e dependencias de uso.
 
+skinparam shadowing false
+skinparam nodesep 40
+skinparam ranksep 60
+
+' ── Interfaces ──
 interface "REST" as IREST
 interface "WebSocket" as IWS
+interface "Sala WebRTC" as IRoom
 
 package "Interface Web (React/TypeScript)" {
-  [App.tsx] as App
-  [AuditDashboard.tsx] as Dash
-  [useTelemetryWS.ts] as WSClient
+  component "App.tsx" as App
+  component "AuditDashboard.tsx" as Dash
+  component "useTelemetryWS.ts" as WSClient
 }
 
 package "Servidor Core (Go)" {
-  [authServer\n(handlers REST)] as Core
-  [telemetryHub\n(Hub WebSocket)] as Hub
-  [db.go\n(acesso MongoDB)] as DBaccess
+  component "authServer\n(handlers REST)" as Core
+  component "telemetryHub\n(Hub WebSocket)" as Hub
+  component "db.go\n(acesso MongoDB)" as DBaccess
 }
 
 package "Runner (Node.js / Puppeteer)" {
-  [run-audit.mjs] as Runner
-  [ProviderFactory\nIConferenceProvider] as Providers
+  component "run-audit.mjs" as Runner
+  component "ProviderFactory\n«Strategy»" as Factory
 }
 
 database "MongoDB\n(users, test_history,\ntelemetry_events)" as Mongo
 
 package "Provedores externos" {
-  [Jitsi]
-  [Whereby]
-  [Zoom]
+  component "Jitsi"   as Jitsi
+  component "Whereby" as Whereby
+  component "Zoom"    as Zoom
 }
 
-' Frontend -> Core (interfaces REST e WebSocket)
+' ── Layout: mantem o frontend acima do Core (conectores curtos) ──
+App -[hidden]down-> Core
+WSClient -[hidden]down-> Hub
+
+' ── Interfaces providas (pirulito) e requeridas (soquete), com protocolo ──
+Core - IREST
+App --( IREST : HTTP/HTTPS (TCP/IP)
+Hub - IWS
+WSClient --( IWS : WebSocket/WSS (TCP/IP)
+
+' ── Dependencias internas (chamadas em processo) ──
 Dash ..> WSClient
-App --> IREST
-WSClient --> IWS
-IREST -- Core
-IWS -- Hub
+Core ..> DBaccess
 
-' Core: persistência e orquestração
-Core --> DBaccess
-Hub --> DBaccess
-DBaccess --> Mongo
-Core --> Runner : spawn / stdout
+' ── Comunicacoes entre componentes, com protocolo/tecnologia ──
+DBaccess ..> Mongo : MongoDB Wire\nProtocol (TCP/IP)
+Core ..> Runner : spawn + stdout\n(NDJSON) / control.json
+Runner ..> Factory
 
-' Runner -> provedores via Strategy/Factory
-Runner --> Providers
-Providers --> [Jitsi]
-Providers --> [Whereby]
-Providers --> [Zoom]
+' ── Strategy: a Factory requer uma Sala WebRTC, provida pelos provedores ──
+Factory --( IRoom : HTTPS + WebRTC
+Jitsi - IRoom
+Whereby - IRoom
+Zoom - IRoom
+
 @enduml
