@@ -1,57 +1,113 @@
 @startuml
 skinparam linetype ortho
 skinparam classAttributeIconSize 0
-skinparam nodesep 70
-skinparam ranksep 80
+skinparam nodesep 25
+skinparam ranksep 55
 skinparam shadowing false
 
 package "Modelos (Domínio)" {
     class Usuario {
       - id: UUID
       - nome: string
+      - email: string
       - funcao: EnumFuncao
       + autenticar(): bool
     }
 
     class Teste {
       - id: UUID
-      - config: JSON
+      - apiUrl: string
+      - usuariosVirtuais: int
+      - duracaoSeg: int
       - status: EnumStatus
-      - iniciado_em: timestamp
-      - instabilidade: JSON
+      - iniciadoEm: timestamp
       + calcularProgresso(): float
     }
 
     class Relatorio {
       - id: UUID
-      - latencia_media: float
-      - taxa_falhas: float
-      - url_json: string
-      + consolidarMétricas(): void
+      - latenciaMedia: float
+      - taxaFalhas: float
+      - urlJson: string
+      - urlCsv: string
+      + consolidarMetricas(): void
+    }
+
+    class EventoTelemetria {
+      - id: UUID
+      - tipo: string
+      - timestamp: timestamp
+      - payload: JSON
+    }
+
+    class MetricasWebRTC {
+      - rttMs: float
+      - jitter: float
+      - perdaPacotes: int
+      - bitrate: int
+      - framesDecodificados: int
+      - resolucao: string
+    }
+
+    class PerfilChaos {
+      - nome: string
+      - latenciaMs: int
+      - perdaPercent: float
+      - offline: bool
+      + aplicar(page): void
     }
 }
 
 package "Core (Lógica de Execução)" {
+    class AuthService {
+      - jwtSecret: string
+      + registrar(dados): Usuario
+      + logar(email, senha): string
+      + validarToken(token): bool
+    }
+
     class TestEngine {
-        - activeWorkers: List<WorkerNode>
-        + iniciarTeste(teste: Teste): void
-        - orquestrarPuppeteer(): void
+      - usuariosAtivos: List<UsuarioVirtual>
+      + iniciarTeste(teste: Teste): void
+      + finalizarTeste(): void
+      - orquestrarPuppeteer(): void
     }
 
-    class WorkerNode {
-        - instanceId: UUID
-        + spawn(config: JSON): void
-        + injectFailure(type: string): void
-        + collectRTCStats(): MetricasRaw
+    class PoolController {
+      - alvoUsuarios: int
+      - pausado: bool
+      + ajustarConcorrencia(n: int): void
+      + pausar(): void
+      + retomar(): void
     }
 
-    class SocketManager {
-        + broadcastMetric(data: JSON): void
-        + notifyCompletion(id: UUID): void
+    class UsuarioVirtual {
+      - instanceId: UUID
+      + entrarNaSala(config: JSON): void
+      + injetarFalha(perfil: PerfilChaos): void
+      + coletarStats(): MetricasWebRTC
+    }
+
+    class TelemetryHub {
+      - clientes: List<Conexao>
+      + registrar(cliente): void
+      + broadcast(evento: EventoTelemetria): void
+      + notificarConclusao(id: UUID): void
+    }
+
+    class RollupAccumulator {
+      + adicionarEvento(e: EventoTelemetria): void
+      + consolidar(): Relatorio
+    }
+
+    class Persistencia {
+      + salvarSessao(t: Teste): void
+      + salvarEvento(e: EventoTelemetria): void
+      + listarHistorico(): List<Teste>
     }
 }
 
-package "Integração & Estratégia" {
+package "Integração e Estratégia" {
     class ProviderFactory {
         + {static} createProvider(url: string): IConferenceProvider
     }
@@ -61,7 +117,7 @@ package "Integração & Estratégia" {
         + name: string
         + requiresAccessToken(): boolean
         + isMultiPage(): boolean
-        + getStats(page, browser): MetricasRaw
+        + getStats(page, browser): MetricasWebRTC
     }
 
     class WebRTCProvider implements IConferenceProvider
@@ -70,13 +126,45 @@ package "Integração & Estratégia" {
     class ZoomProvider implements IConferenceProvider
 }
 
-' Relacionamentos
+' Relacionamentos de domínio
 Usuario "1" -- "*" Teste : solicita >
 Teste "1" -- "0..1" Relatorio : gera >
+Teste "1" -- "*" EventoTelemetria : produz >
+Teste "1" -- "0..1" PerfilChaos : aplica >
+EventoTelemetria "1" ..> "0..1" MetricasWebRTC : carrega >
 
-TestEngine "1" *-- "*" WorkerNode : gerencia >
-WorkerNode --> ProviderFactory : usa >
+' Autenticação e persistência
+AuthService ..> Usuario : autentica >
+AuthService ..> Persistencia : consulta >
+Persistencia ..> Teste : persiste >
+Persistencia ..> EventoTelemetria : persiste >
+
+' Execução e orquestração
+TestEngine "1" *-- "*" UsuarioVirtual : gerencia >
+TestEngine ..> PoolController : lê controle >
+TestEngine ..> TelemetryHub : publica >
+TestEngine ..> RollupAccumulator : agrega >
+RollupAccumulator ..> EventoTelemetria : consome >
+UsuarioVirtual ..> TelemetryHub : telemetria >
+UsuarioVirtual ..> MetricasWebRTC : coleta >
+
+' Estratégia de provedores
+UsuarioVirtual --> ProviderFactory : usa >
 ProviderFactory ..> IConferenceProvider : cria >
-TestEngine ..> SocketManager : live data >
-WorkerNode ..> SocketManager : telemetria >
+
+' ===== Layout vertical (mais alto e estreito para caber na folha) =====
+' Empilha os pacotes verticalmente (ancoras sem conflito de dependencia)
+PerfilChaos -[hidden]down- AuthService
+Persistencia -[hidden]down- ProviderFactory
+
+' Quebra o Core em 2 colunas (empilhando as classes)
+AuthService -[hidden]down- PoolController
+PoolController -[hidden]down- UsuarioVirtual
+UsuarioVirtual -[hidden]down- Persistencia
+TestEngine -[hidden]down- RollupAccumulator
+RollupAccumulator -[hidden]down- TelemetryHub
+
+' Provedores em grade 2x2 (em vez de fileira unica)
+ZoomProvider -[hidden]down- JitsiProvider
+WebRTCProvider -[hidden]down- WherebyProvider
 @enduml

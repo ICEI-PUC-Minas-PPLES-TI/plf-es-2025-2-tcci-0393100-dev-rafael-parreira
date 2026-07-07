@@ -4,51 +4,70 @@ skinparam packageStyle rectangle
 skinparam shadowing false
 skinparam actorStyle awesome
 
-' Definição da Hierarquia de Atores para limpar as setas
+' Hierarquia de atores: todos herdam a autenticação do Usuário do Sistema
 actor "Usuário do Sistema" as User
 actor "Desenvolvedor React" as Dev
 actor "Engenheiro de QA" as QA
 actor "Equipe Ágil" as Equipe
 
-' Herança: Todos os atores são Usuários e herdam o Login
 User <|-- Dev
 User <|-- QA
 User <|-- Equipe
 
+' Ordena os atores verticalmente para levar o Usuário do Sistema (e o UC01) ao topo
+User -[hidden]down- Dev
+Dev -[hidden]down- QA
+QA -[hidden]down- Equipe
+
 rectangle "Stream Sentry - Sistema de Testes E2E" {
 
-    ' Caso de uso comum a todos através da herança
-    usecase "UC00: Realizar Autenticação\n(Registrar/Logar)" as UC_Auth
+    usecase "UC01: Realizar Autenticação" as UC01
 
     package "Módulo de Simulação" {
-        usecase "UC01: Configurar Provedores\n(Strategy Pattern)" as UC_Config
-        usecase "UC02: Simular Múltiplos\nUsuários Virtuais" as UC_Simulate
-        usecase "UC03: Injetar Instabilidade de Rede" as UC_Stress
+        usecase "UC02: Configurar Teste" as UC02
+        usecase "UC03: Selecionar Provedor" as UC03
+        usecase "UC04: Simular Múltiplos\nUsuários Virtuais" as UC04
+        usecase "UC05: Injetar Instabilidade\nde Rede" as UC05
+        usecase "UC06: Executar Smoke Test" as UC06
+        usecase "UC07: Iniciar Teste" as UC07
     }
 
-    package "Módulo de Monitoramento" {
-        usecase "UC04: Monitorar Telemetria em\nTempo Real (WebSockets)" as UC_Live
-        usecase "UC05: Auditar Métricas de Áudio/Vídeo" as UC_Audit
+    package "Módulo de Monitoramento e Controle" {
+        usecase "UC08: Monitorar Telemetria\nem Tempo Real" as UC08
+        usecase "UC09: Auditar Métricas de\nÁudio e Vídeo" as UC09
+        usecase "UC10: Pausar e Retomar Teste" as UC10
+        usecase "UC11: Ajustar Concorrência\nao Vivo" as UC11
+        usecase "UC12: Finalizar Teste" as UC12
     }
 
     package "Módulo de Análise" {
-        usecase "UC06: Visualizar Histórico e Dashboard" as UC_Dash
-        usecase "UC07: Exportar Relatórios (JSON/CSV)" as UC_Export
+        usecase "UC15: Exportar Relatórios" as UC15
+        usecase "UC14: Reabrir Auditoria\nde Sessão" as UC14
+        usecase "UC13: Consultar Histórico\nde Sessões" as UC13
     }
 }
 
-' Apenas o ator genérico aponta para o Login (Limpa o emaranhado)
-User --> UC_Auth
+' Autenticação: ligada ao ator genérico (herdada por todos)
+User --> UC01
 
-' Atores específicos apontam para suas funções exclusivas
-Dev --> UC_Config
-Dev --> UC_Simulate
-Dev --> UC_Stress
+' Desenvolvedor React
+Dev --> UC02
+Dev --> UC03
+Dev --> UC04
+Dev --> UC05
+Dev --> UC06
+Dev --> UC07
 
-QA --> UC_Live
-QA --> UC_Audit
+' Engenheiro de QA
+QA --> UC08
+QA --> UC09
+QA --> UC10
+QA --> UC11
+QA --> UC12
 
-Equipe --> UC_Dash
-Equipe --> UC_Export
+' Equipe Ágil
+Equipe --> UC13
+Equipe --> UC14
+Equipe --> UC15
 
 @enduml
