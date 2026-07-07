@@ -1,75 +1,87 @@
 # Artefatos do Projeto
 
-Este diretório mantém os artefatos visuais (diagramas UML, diagramas de entidade-relacionamento e telas/mockups) produzidos para documentar a arquitetura, o design e as funcionalidades do sistema.
+Este diretório mantém os artefatos visuais (diagramas UML, modelo de dados e telas/mockups) produzidos para documentar a arquitetura, o design e as funcionalidades do Stream Sentry. Para cada diagrama há o arquivo-fonte em **`.puml`** (PlantUML) e a respectiva imagem em **`.png`**.
 
 ---
 
-## Design UML e Arquitetura
+## Arquitetura e Estrutura (UML estático)
 
-Os diagramas de modelagem UML e de arquitetura lógica/componentes estão organizados pelos seus tipos. Para cada diagrama, existe o arquivo-fonte em **`.puml`** (PlantUML) e sua respectiva imagem gerada em **`.png`**.
-
-* `/`
-	* **ArquiteturaLogica.puml / .png**: Diagrama de **Arquitetura Lógica** (Visão Geral da Estrutura).
-	* **DiagramaDeComponentes.puml / .png**: Diagrama de **Componentes** (Estrutura e Relação entre Componentes do Sistema).
-	* **DiagramaDeImplantacao.puml / .png**: Diagrama de **Implantação** (Alocação de artefatos em nós físicos).
-	* **DiagramaDeClasses.puml / .png**: Diagrama de **Classes** (Estrutura estática do sistema).
+* **ArquiteturaLogica.puml / .png**: **Arquitetura Lógica** — visão em camadas (Interface React, Servidor Core em Go, Runner Node.js/Puppeteer, Persistência MongoDB).
+* **DiagramaDeComponentes.puml / .png**: **Componentes** — módulos do sistema e suas interfaces (REST e WebSocket).
+* **DiagramaDeImplantacao.puml / .png**: **Implantação** — alocação dos artefatos (host único; nota de hospedagem futura).
+* **DiagramaDeClasses.puml / .png**: **Classes** — estrutura estática, incluindo o padrão Strategy/Factory (`IConferenceProvider`, `ProviderFactory` e os providers Jitsi/Whereby/Zoom/WebRTC).
 
 ---
 
-## Casos de Uso e Fluxos
+## Casos de Uso
 
-Esta seção contém diagramas que modelam as interações e o comportamento do sistema.
-
-* `/`
-	* **CasosDeUso.puml / .png**: Diagrama de **Casos de Uso** principal.
-	* **CasosDeUsoSlides1.puml / .png**: Variação ou detalhe do Diagrama de Casos de Uso para apresentação/slides (1).
-	* **CasosDeUsoSlides2.puml / .png**: Variação ou detalhe do Diagrama de Casos de Uso para apresentação/slides (2).
-	* **DiagramaDeAtividades.puml / .png**: Diagrama de **Atividades** (Fluxo de trabalho e controle).
-	* **DiagramaDeComunicacao.puml / .png**: Diagrama de **Comunicação** (Interação entre objetos ou *lifelines*).
+* **CasosDeUso.puml / .png**: Diagrama de **Casos de Uso** principal.
+* **CasosDeUsoSlides1.puml / .png**: Recorte do diagrama de casos de uso para apresentação (1).
+* **CasosDeUsoSlides2.puml / .png**: Recorte do diagrama de casos de uso para apresentação (2).
 
 ---
 
-## Diagramas de Sequência
+## Atividades
 
-Diagramas que detalham a ordem temporal das mensagens trocadas entre objetos para realizar casos de uso específicos.
-
-* `/`
-	* **DiagramaDeSequencia.puml / .png**: Diagrama de **Sequência** (Genérico/Principal).
-	* **DiagramaDeSequenciaConfiguracaoDeTestes.puml / .png**: Diagrama de Sequência para o caso de uso **Configuração de Testes**.
-	* **DiagramaDeSequenciaExecucaoDeTestes.puml / .png**: Diagrama de Sequência para o caso de uso **Execução de Testes**.
-	* **DiagramaDeSequenciaExportacaoDeRelatorio.puml / .png**: Diagrama de Sequência para o caso de uso **Exportação de Relatório**.
+* **DiagramaDeAtividades.puml / .png**: Diagrama de **Atividades** — ciclo de vida operacional do sistema.
 
 ---
 
-## Modelagem de Dados
+## Diagramas de Sequência do Sistema (DSS)
 
-Diagrama de Entidade-Relacionamento (DER).
+Visão "caixa-preta" das operações do sistema (Seção 2.4 do Documento de Projeto).
 
-* `/`
-	* **DiagramaER.puml / .png**: **Diagrama de Entidade-Relacionamento (DER)** para a base de dados.
+* **DSSAutenticacaoERegistro.puml / .png**: Cadastro e login (autenticação).
+* **DSSConfiguracaoDeCenarioDeTeste.puml / .png**: Configuração de cenário de teste.
+* **DSSExecucaoEMonitoramentoEmTempoReal.puml / .png**: Execução e monitoramento em tempo real.
+* **DSSExportacaoDeResultadosAnaliticos.puml / .png**: Exportação de resultados analíticos.
+
+---
+
+## Diagramas de Sequência (detalhados)
+
+Colaboração entre os componentes internos (Seção 3.2).
+
+* **DiagramaDeSequenciaDeValidacaoViaStrategyPattern.puml / .png**: Configuração e validação (seleção de provedor via Strategy/Factory).
+* **DiagramaDeSequenciaOrquestracaoDeWorkersETelemetria.puml / .png**: Execução em tempo real e telemetria.
+* **DiagramaDeSequenciaDeGeracaoDeRelatorios.puml / .png**: Geração de relatórios.
+* **DiagramaDeSequenciaControleAoVivo.puml / .png**: Controle ao vivo do teste (pausar/retomar, concorrência, chaos, finalizar).
+* **DiagramaDeSequenciaHistorico.puml / .png**: Consulta ao histórico e reabertura de auditoria.
+
+---
+
+## Diagramas de Comunicação
+
+Mesmas operações na notação de comunicação (Seção 3.3).
+
+* **DiagramaDeComunicacaoConfiguracaoEValidacao.puml / .png**: Configuração e validação.
+* **DiagramaDeComunicacaoExecucaoETelemetria.puml / .png**: Execução e telemetria.
+* **DiagramaDeComunicacaoGeracaoDeRelatorios.puml / .png**: Processamento de relatórios.
+* **DiagramaDeComunicacaoControleAoVivo.puml / .png**: Controle ao vivo do teste.
+* **DiagramaDeComunicacaoHistorico.puml / .png**: Consulta ao histórico.
+
+---
+
+## Modelo de Dados
+
+* **DiagramaER.puml / .png**: **Modelo de dados (MongoDB)** — coleções `users`, `test_history`, `telemetry_events` e `counters` (modelo documental, não relacional).
 
 ---
 
 ## Personas
 
-Imagens para documentação das personas do projeto.
-
-* `/`
-	* **PersonaAna.png**: Imagem/documento da **Persona Ana**.
-	* **PersonaCarla.png**: Imagem/documento da **Persona Carla**.
-	* **PersonaFelipe.png**: Imagem/documento da **Persona Felipe**.
-	* **PersonaLucas.png**: Imagem/documento da **Persona Lucas**.
+* **PersonaLucas.png**: Persona Lucas (Desenvolvedor React).
+* **PersonaAna.png**: Persona Ana (Engenheira de QA).
+* **PersonaFelipe.png**: Persona Felipe (Tech Lead / Equipe Ágil).
+* **PersonaCarla.png**: Persona Carla (material complementar).
 
 ---
 
-## Telas / Mockups
+## Telas / Mockups (wireframes projetados)
 
-Capturas de tela ou mockups de interfaces do sistema.
-
-* `/`
-	* **ConfiguracoesAvancadas.png**: Tela/Mockup das **Configurações Avançadas**.
-	* **ConfigurarTeste.png**: Tela/Mockup da interface para **Configurar Teste**.
-	* **ExecutarTeste.png**: Tela/Mockup da interface para **Executar Teste**.
-	* **HistoricoDeTestes.png**: Tela/Mockup do **Histórico de Testes**.
-	* **Login.png**: Tela/Mockup da tela de **Login**.
-	* **Relatorios.png**: Tela/Mockup da interface de **Relatórios**.
+* **ConfigurarTeste.png**: Mockup da tela "Configurar Teste".
+* **ExecutarTeste.png**: Mockup da tela "Executar Teste".
+* **Relatorios.png**: Mockup da tela "Relatórios".
+* **HistoricoDeTestes.png**: Mockup do "Histórico de Testes".
+* **ConfiguracoesAvancadas.png**: Mockup das "Configurações Avançadas".
+* **Login.png**: Mockup da tela de "Login".

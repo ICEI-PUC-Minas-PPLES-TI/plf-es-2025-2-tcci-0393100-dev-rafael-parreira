@@ -1,0 +1,68 @@
+@startuml
+' Variante para slides do Diagrama de Componentes (notacao UML).
+' Componentes com icone UML; interfaces no formato provido (pirulito) / requerido (soquete).
+' Diagrama completo em DiagramaDeComponentes.puml.
+
+title Stream Sentry - Principais Componentes
+
+skinparam dpi 150
+skinparam shadowing false
+skinparam nodesep 40
+skinparam ranksep 70
+skinparam defaultTextAlignment center
+skinparam ArrowFontSize 11
+
+' ── Interfaces ──
+interface "REST" as IREST
+interface "WebSocket" as IWS
+interface "Sala WebRTC" as IRoom
+
+package "Interface Web (React / TypeScript)" #F9F9F9 {
+  component "App.tsx" as App
+  component "AuditDashboard.tsx" as Dash
+  component "useTelemetryWS.ts" as WSClient
+}
+
+package "Servidor Core (Go)" #E8F4FC {
+  component "authServer\n(handlers REST)" as Core
+  component "telemetryHub\n(Hub WebSocket)" as Hub
+  component "db.go\n(acesso MongoDB)" as DBaccess
+}
+
+package "Runner (Node.js / Puppeteer)" #F0F0F0 {
+  component "run-audit.mjs" as Runner
+  component "ProviderFactory\n«Strategy»" as Factory
+}
+
+database "MongoDB\nusers | test_history\ntelemetry_events" as Mongo #F5F5E8
+
+package "Provedores externos" #FFFFFF {
+  component "Jitsi"   as Jitsi
+  component "Whereby" as Whereby
+  component "Zoom"    as Zoom
+}
+
+' ── Layout: mantem o frontend acima do Core (conectores curtos) ──
+App -[hidden]down-> Core
+WSClient -[hidden]down-> Hub
+
+' ── Interfaces providas (pirulito) e requeridas (soquete) ──
+Core - IREST
+App --( IREST
+Hub - IWS
+WSClient --( IWS
+
+' ── Dependencias de uso (tracejado) ──
+Dash ..> WSClient
+Core ..> DBaccess
+DBaccess ..> Mongo
+Core ..> Runner : «inicia / stdout»
+Runner ..> Factory
+
+' ── Strategy: a Factory requer uma Sala WebRTC, provida pelos provedores ──
+Factory --( IRoom
+Jitsi - IRoom
+Whereby - IRoom
+Zoom - IRoom
+
+@enduml

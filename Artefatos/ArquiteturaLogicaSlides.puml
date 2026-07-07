@@ -1,0 +1,55 @@
+@startuml
+' Variante enxuta da Arquitetura Lógica para apresentação (slides).
+' O diagrama completo, com as coleções do MongoDB detalhadas, está em ArquiteturaLogica.puml.
+
+title Stream Sentry - Arquitetura Lógica
+
+skinparam dpi 150
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 45
+skinparam ranksep 75
+skinparam defaultTextAlignment center
+skinparam ArrowFontSize 11
+skinparam ArrowColor #555555
+
+package "1 - Interface Web (React)" #F9F9F9 {
+  component "Views\nLanding | Autenticacao | Iniciar Teste\nAuditoria | Historico" as UI
+}
+
+package "2 - Servidor Core (Go)" #E8F4FC {
+  component "API REST" as REST
+  component "Orquestrador\nde Teste" as Orchestrator
+  component "Hub WebSocket" as WSHub
+  component "Motor de\nRelatorios" as Reports
+}
+
+package "3 - Runner de Teste (Node.js)" #F0F0F0 {
+  component "run-audit.mjs\n(pool)" as Script
+  component "Workers\nChromium / Threads" as Workers
+}
+
+package "4 - Sistemas Externos" #FFFFFF {
+  component "Salas de Videoconferencia\nJitsi | Whereby | Zoom" as External
+}
+
+database "MongoDB\nusers | test_history\ntelemetry_events" as DB #F5F5E8
+
+' ── Caminho principal (cima -> baixo) ──
+UI            -->  REST          : HTTP/JSON
+REST          -->  Orchestrator  : inicia teste
+Orchestrator  <--> Script        : spawn / stdout
+Script        -->  Workers       : abre browsers
+Workers       <--> External      : WebRTC / getStats()
+
+' ── Telemetria em tempo real (WebSocket) ──
+Orchestrator  -->  WSHub         : broadcast
+UI            <--> WSHub         : telemetria (WS)
+
+' ── Relatorios e persistencia (lateral, a direita do Core) ──
+REST          -->   Reports      : exportar
+Orchestrator  .right.> DB         : grava
+Reports       .right.> DB         : le
+
+@enduml
