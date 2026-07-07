@@ -3,26 +3,30 @@ hide footbox
 skinparam ParticipantPadding 20
 skinparam MaxMessageSize 150
 
-actor "Equipe Ágil" as Equipe
+actor "Tech Lead" as TechLead
 participant "Interface React\n(Relatórios)" as Web
 participant "ReportGenerator\n(Core API, Go)" as Generator
 database "MongoDB" as DB
 
-Equipe -> Web: Solicita exportação (ID, formato)
+TechLead -> Web: Solicita exportação (ID, formato)
 activate Web
 Web -> Generator: GET /reports/export?sessionId=...&format=csv
 activate Generator
 
 Generator -> DB: Consulta test_history e telemetry_events (sessionId)
 activate DB
-DB --> Generator: Dataset de telemetria
+DB --> Generator: Resultado da consulta
 deactivate DB
 
-Generator -> Generator: Agregar dados (média QoE, falhas)
-Generator -> Generator: Aplicar estratégia de formatação (CSV/JSON)
-
-Generator --> Web: Stream do arquivo processado
+alt Sessão encontrada com telemetria
+    Generator -> Generator: Agregar dados (média QoE, falhas)
+    Generator -> Generator: Aplicar estratégia de formatação (CSV/JSON)
+    Generator --> Web: Stream do arquivo processado
+    Web --> TechLead: Download do relatório analítico
+else Sessão inexistente ou sem dados
+    Generator --> Web: Erro (relatório indisponível)
+    Web --> TechLead: Mensagem de falha na geração
+end
 deactivate Generator
-Web --> Equipe: Download do relatório analítico
 deactivate Web
 @enduml

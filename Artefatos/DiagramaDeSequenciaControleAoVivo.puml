@@ -6,26 +6,26 @@ skinparam MaxMessageSize 150
 actor "Engenheiro de QA" as QA
 participant "Interface React\n(App)" as Web
 participant "authServer\n(Core API, Go)" as Core
-participant "control.json" as Ctrl
-participant "run-audit.mjs\n(pool de VUs)" as Runner
+participant "PoolController" as Ctrl
+participant "Runner\n(pool de UsuarioVirtual)" as Runner
 
 QA -> Web: Ajustar concorrência/chaos\nou Pausar/Retomar/Finalizar
 activate Web
 Web -> Core: POST /test/control | /test/pause | /test/resume | /test/stop
 activate Core
-Core -> Ctrl: mergeWriteAuditControl(targetVirtualUsers, chaos, paused)
+Core -> Ctrl: Atualiza estado de controle\n(concorrência, chaos, pausa)
 Core --> Web: 200 OK
 deactivate Core
 
 loop A cada ~1s, enquanto o teste roda
-    Runner -> Ctrl: readControlSync()
+    Runner -> Ctrl: Lê estado de controle atual
     activate Runner
-    Runner -> Runner: ajusta o pool (spawn/stop VUs),\naplica chaos via CDP e pausa o dwell
+    Runner -> Runner: Ajusta o pool (adiciona/remove VUs),\naplica chaos e pausa a permanência
     deactivate Runner
 end
 
 opt Finalizar teste (/test/stop)
-    Core -> Runner: cancela o processo (context)
+    Core -> Runner: Cancela a execução
     Core -> Web: broadcast 'test_stopped' (WebSocket)
 end
 deactivate Web

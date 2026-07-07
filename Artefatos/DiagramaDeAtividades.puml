@@ -32,7 +32,7 @@ partition "Execução" {
 
 |Sistema (Stream Sentry)|
 partition "Monitoramento & Estresse" {
-    while (Duração Ativa?) is (sim)
+    while (Teste em execução?) is (sim)
         :Coletar Métricas;
         fork
             :Update Dashboard (Hot Path);
