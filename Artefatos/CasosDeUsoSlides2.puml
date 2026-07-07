@@ -1,27 +1,50 @@
 @startuml
-top to bottom direction
+' Recorte 2/2 do diagrama de Casos de Uso para apresentacao.
+' Foco: Modulo de Monitoramento (Engenheiro de QA) e Modulo de Analise (Equipe Agil).
+' Diagrama completo em CasosDeUso.puml.
 
-actor "Pesquisador Acadêmico" as Pesquisador
+top to bottom direction
+skinparam dpi 150
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam actorStyle awesome
+
+actor "Usuário do Sistema" as User
+actor "Engenheiro de QA" as QA
 actor "Equipe Ágil" as Equipe
 
-rectangle "Funcionalidades Principais\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n" {
+' Herança: ambos os atores são Usuários e herdam a autenticação
+User <|-- QA
+User <|-- Equipe
 
-  usecase "Modificar Código-Fonte\nOpen-Source" as UC4
-  usecase "Acessar Documentação\nTécnica" as UC5
-  usecase "Integrar Testes\nem Pipeline" as UC6
+rectangle "Stream Sentry - Monitoramento e Análise" {
 
-  ' Organiza em duas colunas (pilhas de 2)
-  ' Coluna 1
-  UC4 -[hidden]down- UC6
-  ' Coluna 2
+    usecase "UC00: Realizar Autenticação\n(Registrar/Logar)" as UC_Auth
 
-  ' Alinha as duas colunas lado a lado
-  UC4 -[hidden]right- UC5
+    package "Módulo de Monitoramento" {
+        usecase "UC04: Monitorar Telemetria em\nTempo Real (WebSockets)" as UC_Live
+        usecase "UC05: Auditar Métricas de Áudio/Vídeo" as UC_Audit
+    }
+
+    package "Módulo de Análise" {
+        usecase "UC06: Visualizar Histórico\ne Dashboard" as UC_Dash
+        usecase "UC07: Exportar Relatórios\n(JSON/CSV)" as UC_Export
+    }
+
+    ' Empilha os use cases numa coluna (reduz a largura para os slides)
+    UC_Auth -[hidden]down-> UC_Live
+    UC_Live -[hidden]down-> UC_Audit
+    UC_Audit -[hidden]down-> UC_Dash
+    UC_Dash -[hidden]down-> UC_Export
 }
 
-Pesquisador --> UC4
-Pesquisador --> UC5
+' Apenas o ator genérico aponta para o Login (limpa o emaranhado)
+User --> UC_Auth
 
-Equipe --> UC6
+QA --> UC_Live
+QA --> UC_Audit
+
+Equipe --> UC_Dash
+Equipe --> UC_Export
 
 @enduml

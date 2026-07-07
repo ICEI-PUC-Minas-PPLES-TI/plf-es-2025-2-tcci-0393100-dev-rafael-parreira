@@ -1,23 +1,41 @@
 @startuml
+' Recorte 1/2 do diagrama de Casos de Uso para apresentacao.
+' Foco: Autenticacao (base) e Modulo de Simulacao (Desenvolvedor React).
+' Diagrama completo em CasosDeUso.puml.
+
 top to bottom direction
+skinparam dpi 150
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam actorStyle awesome
 
+actor "Usuário do Sistema" as User
 actor "Desenvolvedor React" as Dev
-actor "Engenheiro de QA" as QA
 
-rectangle "Funcionalidades Principais\n\n\n\n\n\n\n" {
+' Herança: o Desenvolvedor é um Usuário e herda a autenticação
+User <|-- Dev
 
-  usecase "Configurar Teste com\nMúltiplos Usuários" as UC1
-  usecase "Visualizar\nRelatórios" as UC2
-  usecase "Executar Teste\nAutomatizado de Qualidade" as UC3
+rectangle "Stream Sentry - Configuração e Simulação" {
 
-  ' Força o layout vertical
-  UC2 -[hidden]-> UC3
+    usecase "UC00: Realizar Autenticação\n(Registrar/Logar)" as UC_Auth
+
+    package "Módulo de Simulação" {
+        usecase "UC01: Configurar Provedores\n(Strategy Pattern)" as UC_Config
+        usecase "UC02: Simular Múltiplos\nUsuários Virtuais" as UC_Simulate
+        usecase "UC03: Injetar Instabilidade\nde Rede" as UC_Stress
+    }
+
+    ' Empilha os use cases numa coluna (reduz a largura para os slides)
+    UC_Auth -[hidden]down-> UC_Config
+    UC_Config -[hidden]down-> UC_Simulate
+    UC_Simulate -[hidden]down-> UC_Stress
 }
 
-Dev --> UC1
-QA --> UC2
-QA --> UC3
+' Apenas o ator genérico aponta para o Login (limpa o emaranhado)
+User --> UC_Auth
 
-UC3 <.. UC2 : <<extend>>
+Dev --> UC_Config
+Dev --> UC_Simulate
+Dev --> UC_Stress
 
 @enduml
