@@ -8,16 +8,16 @@ skinparam actorStyle awesome
 actor "Usuário do Sistema" as User
 actor "Desenvolvedor React" as Dev
 actor "Engenheiro de QA" as QA
-actor "Equipe Ágil" as Equipe
+actor "Tech Lead" as TechLead
 
 User <|-- Dev
 User <|-- QA
-User <|-- Equipe
+User <|-- TechLead
 
 ' Ordena os atores verticalmente para levar o Usuário do Sistema (e o UC01) ao topo
 User -[hidden]down- Dev
 Dev -[hidden]down- QA
-QA -[hidden]down- Equipe
+QA -[hidden]down- TechLead
 
 rectangle "Stream Sentry - Sistema de Testes E2E" {
 
@@ -48,26 +48,26 @@ rectangle "Stream Sentry - Sistema de Testes E2E" {
 }
 
 ' Autenticação: ligada ao ator genérico (herdada por todos)
-User --> UC01
+User -- UC01
 
 ' Desenvolvedor React
-Dev --> UC02
-Dev --> UC03
-Dev --> UC04
-Dev --> UC05
-Dev --> UC06
-Dev --> UC07
+Dev -- UC02
+Dev -- UC03
+Dev -- UC04
+Dev -- UC05
+Dev -- UC06
+Dev -- UC07
 
 ' Engenheiro de QA
-QA --> UC08
-QA --> UC09
-QA --> UC10
-QA --> UC11
-QA --> UC12
+QA -- UC08
+QA -- UC09
+QA -- UC10
+QA -- UC11
+QA -- UC12
 
-' Equipe Ágil
-Equipe --> UC13
-Equipe --> UC14
-Equipe --> UC15
+' Tech Lead
+TechLead -- UC13
+TechLead -- UC14
+TechLead -- UC15
 
 @enduml
