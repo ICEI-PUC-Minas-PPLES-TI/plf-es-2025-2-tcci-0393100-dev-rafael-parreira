@@ -1,8 +1,8 @@
 @startuml
 skinparam linetype ortho
 skinparam classAttributeIconSize 0
-skinparam nodesep 25
-skinparam ranksep 55
+skinparam nodesep 18
+skinparam ranksep 90
 skinparam shadowing false
 
 package "Modelos (Domínio)" {
@@ -11,7 +11,18 @@ package "Modelos (Domínio)" {
       - nome: string
       - email: string
       - funcao: EnumFuncao
-      + autenticar(): bool
+    }
+
+    enum EnumFuncao {
+      DESENVOLVEDOR_REACT
+      ENGENHEIRO_QA
+      TECH_LEAD
+    }
+
+    enum EnumStatus {
+      CONFIGURADO
+      EXECUTANDO
+      CONCLUIDO
     }
 
     class Teste {
@@ -126,6 +137,10 @@ package "Integração e Estratégia" {
     class ZoomProvider implements IConferenceProvider
 }
 
+' Tipos enumerados
+Usuario ..> EnumFuncao : usa >
+Teste ..> EnumStatus : usa >
+
 ' Relacionamentos de domínio
 Usuario "1" -- "*" Teste : solicita >
 Teste "1" -- "0..1" Relatorio : gera >
@@ -167,4 +182,8 @@ RollupAccumulator -[hidden]down- TelemetryHub
 ' Provedores em grade 2x2 (em vez de fileira unica)
 ZoomProvider -[hidden]down- JitsiProvider
 WebRTCProvider -[hidden]down- WherebyProvider
+
+' Empilha os enums numa coluna (evita alargar o pacote Modelos)
+Usuario -[hidden]down- EnumFuncao
+EnumFuncao -[hidden]down- EnumStatus
 @enduml
